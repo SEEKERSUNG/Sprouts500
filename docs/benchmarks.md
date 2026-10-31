@@ -1,0 +1,199 @@
+# CoreMark 与 Dhrystone 性能测试
+
+本文说明如何在 Sprouts500 上编译、运行 CoreMark 和 Dhrystone，报告的含义，以及
+重新测量时的注意事项。
+
+## 1. 快速运行
+
+```bash
+bash scripts/build_bench.sh coremark     # 约 70 秒
+bash scripts/build_bench.sh dhrystone    # 约 45 秒
+bash scripts/build_bench.sh              # 两个都跑
+make bench                               # 同上
+```
+
+参数：
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `ITERATIONS=<n>` | 1 | CoreMark 迭代次数 |
+| `DHRY_RUNS=<n>` | 500 | Dhrystone 每轮的运行次数 |
+| `MAX_CYCLES=<n>` | 120000000 | 仿真超时（时钟周期） |
+
+产物在 `build/bench/`，日志在 `logs/bench/`（`coremark.log` 为完整输出，
+`coremark.uart` 为 UART 收到的原始字符）。
+
+## 2. 当前结果
+
+环境：50 MHz（`sim/tb_bench.v` 的时钟），`-O2 -march=rv32im_zicsr`，数据在 DTCM，
+RV32IM（无 FPU、无 cache）。
+
+| Benchmark | 指标 | 数值 |
+|---|---|---|
+| CoreMark 1.0 | CoreMark | **79.86** |
+| CoreMark 1.0 | CoreMark/MHz | **1.60** |
+| CoreMark 1.0 | 每迭代周期 | 626,117 cycles |
+| Dhrystone 2.1 | Dhrystones/s | **41,945** |
+| Dhrystone 2.1 | DMIPS | **23.9** |
+| Dhrystone 2.1 | DMIPS/MHz | **0.477** |
+
+换算：CoreMark = 迭代数 × 频率 / 周期；DMIPS = Dhrystones/s ÷ 1757；
+DMIPS/MHz = DMIPS ÷ 50。
+
+## 3. 运行机制
+
+### 3.1 仿真与时间基准
+
+两个 benchmark 都在 `sim/tb_bench.v` 上运行完整的 SoC（core + 总线 + 外设）：
+
+- 时钟 50 MHz，与 `docs/toolchain.md` 的 SDC 一致；
+- 时间基准是 core 的 `cycle` CSR（`rdcycle`），不是定时器外设；
+- UART 以 115200 解码，benchmark 的报告就是 UART 输出；
+- 结束时程序写 ITCM `0x7FFC` 的 halt magic，testbench 打印
+  `BENCH_RESULT`、`BENCH_CYCLES` 和 `BENCH_PASS`。
+
+因此报告中的“秒”是**仿真周期 ÷ 50 MHz**，与实际硬件在 50 MHz 下运行的结果相同，
+前提是 RTL 和综合网表行为一致。
+
+### 3.2 CoreMark
+
+- 上游源码（EEMBC，Apache-2.0）未修改，放在 `bench/raw/coremark/`；
+- 使用上游 `barebones` 移植层，改动在 `bench/coremark/port/`：
+  - `core_portme.h/.c`：无 stdio/time.h、`HAS_FLOAT=0`、`CLOCKS_PER_SEC=50000000`、
+    `ITERATIONS` 由编译参数给出；
+  - `ee_printf.c`：只把 `uart_send_char` 换成写 UART；
+  - `main.c`：`core_main.c` 以 `-Dmain=coremark_main` 编译，wrapper 在它之后用
+    同样的 start/stop 计时算出带小数的 CoreMark 分数（上游在 `HAS_FLOAT=0` 时只打印
+    整数秒）。
+- 数据区是静态数组（`MEM_STATIC`，约 2 KB），放在 DTCM。
+
+### 3.3 Dhrystone
+
+- 上游源码取自 `riscv-software-src/riscv-tests` 的 `benchmarks/dhrystone`
+  （BSD 许可），放在 `bench/raw/dhrystone/`；
+- 改动在 `bench/dhrystone/port/`：
+  - `dhrystone.h`：`HZ` 改为 50 MHz，`NUMBER_OF_RUNS` 可由编译参数覆盖；
+  - `dhry_patch.h`：强制包含，提供 `read_csr(mcycle)`（`rdcycle`）、`memcpy`/
+    `strcpy`/`strcmp`/`printf` 原型；
+  - `main.c`：去掉 `util.h`（测试框架头文件），补 `bench_uart_init()`，用 64 位中间值
+    计算 Dhrystones/s 和 DMIPS，最后调用 `bench_finish`。
+- `HZ` 改为 50 MHz 后，`Dhrystones/s = HZ × Runs / User_Time` 直接由 50 MHz 周期
+  数得到；`Microseconds` 由 64 位中间值计算，避免 ilp32 下 `long` 溢出。
+
+### 3.4 共用运行时
+
+`bench/runtime/`：
+
+| 文件 | 作用 |
+|---|---|
+| `bench_io.c` | UART 初始化/输出、整数 printf、定点打印、`bench_finish` |
+| `string.c` | `memset`/`memcpy`/`memmove`/`memcmp`/`strlen` |
+| `bench_port.h` | 供两个移植层共用的原型 |
+
+`bench/include/` 提供最小的 `string.h`、`stdio.h`、`alloca.h`（工具链没有 newlib
+头文件）。
+
+`bench/start.S` + `bench/bench.ld`：
+
+- 镜像（`.text/.rodata/.data`）在 ITCM 32 KiB 内；
+- `.bss` 和栈在 DTCM 16 KiB；
+- `_start` 设栈、清 `.bss`、调用 `main`，返回值交给 `bench_finish`。
+
+## 4. 结果解读
+
+### 4.1 CoreMark
+
+上游输出：
+
+```text
+2K performance run parameters for coremark.
+CoreMark Size    : 666
+Total ticks      : 626117
+[0]crclist       : 0xe714
+[0]crcmatrix     : 0x1fd7
+[0]crcstate      : 0x8e3a
+[0]crcfinal      : 0xe714
+CoreMark 1.0 : 79.857 CoreMark
+```
+
+- CRC 值与 EEMBC 公布的 2K 参考值一致，说明结果正确；
+- `ERROR! Must execute for at least 10 secs` 是官方报告规则，仿真不跑 10 秒
+  （50 MHz 下需要约 5 亿周期），但分数本身对任意迭代数都一致（1 次迭代 79.857，
+  4 次迭代 79.865）；
+- 官方规则要求报告时必须注明编译器、标志和迭代数，并用 >=10 秒的运行；
+  这里的结果用于 RTL 性能对比，不是 EEMBC 认证分数。
+
+### 4.2 Dhrystone
+
+```text
+Microseconds for one run through Dhrystone: 23
+Dhrystones per Second:                      41945
+DMIPS:                                      23
+DMIPS/MHz:                                  0.477
+Dhrystone validation: PASS
+```
+
+- `Dhrystone validation: PASS` 检查官方要求的结果值（`Bool_Glob==1`、
+  `Ch_1/Ch_2=='A'/'B'`、`Arr_1_Glob[8]==7`）；
+- DMIPS 归一化到 VAX 11/780 的 1757 Dhrystones/s；
+- 编译器优化会显著影响 Dhrystone，比较时请注明 `-O2`、`__GNUC__`、运行次数。
+
+### 4.3 是否符合官方运行规则
+
+**公式和校验符合，运行长度不符合。** 这点需要明确：
+
+| 要求 | 本测试 | 是否满足 |
+|---|---|---|
+| Dhrystone 2.1 源码 + 官方结果校验 | `Dhrystone validation: PASS` | 是 |
+| Dhrystones/s、DMIPS、DMIPS/MHz 公式 | 由 50 MHz 周期数计算 | 是 |
+| 报告编译器/优化标志 | `-O2 -march=rv32im_zicsr`，GCC 14.2.0 | 是 |
+| 运行时间 ≥ 2 秒（惯例） | 500 轮 ≈ **0.012 秒**（596,008 cycles） | **否** |
+| CoreMark ≥ 10 秒（EEMBC 规则） | 1 次迭代 ≈ **0.013 秒**（626,117 cycles） | **否** |
+
+Dhrystone 2.1 的通行报告惯例是让测量至少持续约 2 秒，以摊薄计时器和循环
+启动开销；官方 CoreMark 报告规则要求 ≥10 秒。当前默认运行是为了让 Icarus
+仿真在可接受时间内完成，分数按周期精确归一化，**不是官方认证分数**。
+
+如果要接近官方运行长度：
+
+```bash
+# Dhrystone ≈ 2 秒（约 1 亿周期，Icarus 约 45 分钟）
+DHRY_RUNS=84000 bash scripts/build_bench.sh dhrystone
+
+# CoreMark ≈ 10 秒（约 5 亿周期，Icarus 约 3.7 小时）
+ITERATIONS=800 bash scripts/build_bench.sh coremark
+```
+
+Icarus 在这套 SoC 上约 37k 周期/秒，因此官方长度主要受仿真速度限制；真实硬件或
+Verilator/FPGA 上可直接跑官方时长。本 port 把 `Too_Small_Time` 从
+`2*HZ`（2 秒）改成 `2`（周期），否则默认运行会自动放大到约 500,000 轮。
+
+
+## 5. 影响分数的因素
+
+| 因素 | 说明 |
+|---|---|
+| 时钟频率 | 分数按 50 MHz 归一化；提高频率需同时更新 `bench/*/port` 中的 HZ/CLOCKS_PER_SEC 和 `sim/tb_bench.v` |
+| 指令集 | 只有 RV32IM；无压缩指令，代码体积更大 |
+| 流水线 | 5 级、无前递、RAW 停顿 2 周期，除法冻结约 33 周期 |
+| 存储器 | ITCM/DTCM 推断阵列，在仿真中无访问延迟（1 周期） |
+| 编译器 | GCC 14.2.0；`-O2 -march=rv32im_zicsr` |
+
+## 6. 重新测量
+
+```bash
+# 单次迭代、完整输出
+bash scripts/build_bench.sh coremark
+
+# 更稳定的 Dhrystone（更长运行，仿真时间按比例增加）
+DHRY_RUNS=2000 bash scripts/build_bench.sh dhrystone
+
+# 只看数字
+grep -E 'CoreMark 1.0|Dhrystones per Second|DMIPS/MHz' logs/bench/*.log
+```
+
+周期数由 core 的 `cycle` CSR 给出，不依赖仿真器的 wall-clock，因此换机器重跑结果
+应完全一致；如果 RTL 改动，`BENCH_CYCLES` 会变化，分数随之更新。
+
+运行时间与指令数成正比：CoreMark 默认 1 次迭代约 70 秒，Dhrystone 500 次约 45 秒
+（Icarus，单线程）。

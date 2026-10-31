@@ -1,0 +1,21 @@
+# build outputs
+build/
+logs/
+*.vvp
+*.elf
+*.bin
+*.hex
+*.vcd
+*.fst
+*.lxt
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+# cocotb / riscv-dv local environments and simulation outputs
+.venv/
+.venv-dv/
+logs/cocotb/
+sim_build/
+results.xml
