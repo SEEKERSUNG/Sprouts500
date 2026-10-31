@@ -13,6 +13,7 @@ Sprouts500 是一个最简的五级 RV32IM MCU IP，仅支持 Ubuntu/Linux。
 - `docs/c_programming.md` — 自写裸机 C 程序（`sw/lib` + `sim/tb_app.v`）
 - `docs/verification_cocotb.md`、`docs/verification_cocotb_core.md` — cocotb 套件
 - `docs/verification_riscv_dv.md` — riscv-dv + Sail 指令级随机 lockstep
+- `docs/benchmarks.md` — CoreMark/Dhrystone ground rule 与 best 分数
 
 当前状态：RV32I/M `riscv-arch-test` 2.x **46/46**；SoC demo 通过；
 Yosys 0.52 Nangate45 综合通过；OpenSTA 3.1.0 **50 MHz pre-CTS MET**
@@ -25,7 +26,7 @@ CPU 时序运行时缩为 2 word；完整签核仍需要 SRAM 宏模型，并在
 bash scripts/setup_ubuntu.sh
 python3 scripts/run_isa.py     # 46/46
 bash scripts/build_demo.sh     # TEST_PASS
-bash scripts/build_bench.sh    # CoreMark + Dhrystone 分数
+bash scripts/build_bench.sh    # CoreMark/Dhrystone best；MODE=ground 取 Dhrystone ground
 bash scripts/run_cocotb.sh     # soc 72 + core 64 项通过
 bash scripts/run_riscv_dv.sh   # riscv-dv + Sail lockstep 通过
 bash scripts/synth.sh

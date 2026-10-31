@@ -18,8 +18,8 @@
 | riscv-dv + Sail 指令级随机 | RV32IM 随机程序 lockstep 比对通过 |
 | Yosys + Nangate45 门级综合 | Yosys 0.52，ABC `-fast`，2-word TCM 时序配置 + 驱动强度提升 |
 | OpenSTA 时序 | **50 MHz pre-CTS MET**：setup +16.01 ns，hold +0.058 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟） |
-| CoreMark 1.0 | **130.12 CoreMark**（**2.60 CoreMark/MHz**，50 MHz） |
-| Dhrystone 2.1 | **65,696 Dhrystones/s**（**37.4 DMIPS**，**0.747 DMIPS/MHz**，50 MHz） |
+| CoreMark 1.0 | **142.14 CoreMark**（**2.84 CoreMark/MHz**，50 MHz，best 编译） |
+| Dhrystone 2.1 | ground **65,696 Dhrystones/s**（37.4 DMIPS）；best **124,345 Dhrystones/s**（70.8 DMIPS，1.415 DMIPS/MHz） |
 
 原始单体 core 保存在 `archive/core_v1.v`。
 
@@ -40,7 +40,7 @@ bash scripts/build_demo.sh         # 期望 TEST_PASS
 bash scripts/build_app.sh sw/example   # 期望 TEST_PASS
 
 # 5. 性能分数（CoreMark + Dhrystone，可选）
-bash scripts/build_bench.sh        # 约 2 分钟；详见 docs/benchmarks.md
+bash scripts/build_bench.sh        # 约 2–3 分钟；详见 docs/benchmarks.md
 
 # 6. 扩展验证（可选；cocotb 需要 python3.14-dev）
 bash scripts/setup_cocotb.sh       # 一次性：.venv + cocotb/pytest
@@ -205,23 +205,27 @@ testbench plusarg、调试流程和预期结果见 `docs/verification.md`；coco
 
 ## 性能
 
-50 MHz、`-O2 -march=rv32im_zicsr`、RV32IM（无 FPU、无 cache），数据位于 DTCM。
-带 EX/MEM->ID 前递和 IF 级分支预测（相比前递前的 79.86 / 41,945 约提升 63% / 57%）：
+50 MHz、RV32IM（无 FPU、无 cache），数据位于 DTCM，带 EX/MEM->ID 前递和 IF 级分支预测。
+benchmark 源码不做算法改动：**ground rule** 用 `-O2` 原样编译；**best** 只调整编译方式
+（Dhrystone 仅去掉源码里非算法性的 `no-inline` pragma，CoreMark 用 `-O2 -flto
+-funroll-loops -fipa-pta`）。
 
-| Benchmark | 分数 | 归一化 |
-|---|---|---|
-| CoreMark 1.0 | **130.12** | **2.60 CoreMark/MHz** |
-| Dhrystone 2.1 | **65,696 Dhrystones/s** | **37.4 DMIPS**，**0.747 DMIPS/MHz** |
+| Benchmark | 模式 | 分数 | 归一化 |
+|---|---|---|---|
+| CoreMark 1.0 | best | **142.14** | **2.84 CoreMark/MHz** |
+| Dhrystone 2.1 | ground | **65,696 Dhrystones/s** | **37.4 DMIPS**，0.747 DMIPS/MHz |
+| Dhrystone 2.1 | best | **124,345 Dhrystones/s** | **70.8 DMIPS**，**1.415 DMIPS/MHz** |
 
 ```bash
-bash scripts/build_bench.sh coremark     # CoreMark
-bash scripts/build_bench.sh dhrystone    # Dhrystone
-bash scripts/build_bench.sh              # 两个都跑
-make bench                               # 同上
+bash scripts/build_bench.sh coremark              # CoreMark best
+bash scripts/build_bench.sh dhrystone             # Dhrystone best
+MODE=ground bash scripts/build_bench.sh dhrystone # Dhrystone ground rule
+bash scripts/build_bench.sh                       # 两个都跑
+make bench                                        # 同上
 ```
 
 分数由 core 的 `cycle` CSR 精确计数，不是仿真器 wall-clock。默认运行长度很短
-（Dhrystone 500 轮 ≈ 0.008 秒，CoreMark 1 次迭代 ≈ 0.008 秒），**不满足**
+（Dhrystone 500 轮 ≈ 0.008 秒，CoreMark 1 次迭代 ≈ 0.007 秒），**不满足**
 Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是周期归一化分数，
 不是认证分数。运行次数、官方长度命令和限制见 `docs/benchmarks.md` §4.3。
 

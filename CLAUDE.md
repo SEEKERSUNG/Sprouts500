@@ -114,8 +114,9 @@ bash scripts/sta.sh              # OpenSTA 报告
 - cocotb 套件通过：`cocotb/soc` 72 项（总线 + 外设 + core 程序）、`cocotb/core`
   64 项（流水线相关/前递/分支预测/CSR/陷阱/中断/总线/停顿）。
 - riscv-dv + Sail 指令级随机 lockstep 通过（默认 3 个种子 + 定向陷阱镜像，4/4）。
-- 性能基线：CoreMark **130.12**（2.60 CoreMark/MHz）；Dhrystone
-  **65,696 Dhrystones/s**（37.4 DMIPS，0.747 DMIPS/MHz）。
+- 性能基线：CoreMark best **142.14**（2.84 CoreMark/MHz）；Dhrystone ground
+  **65,696 Dhrystones/s**（37.4 DMIPS），best **124,345 Dhrystones/s**（70.8 DMIPS，
+  1.415 DMIPS/MHz）。`MODE=ground|best` 只改编译方式，不改 benchmark 源码算法。
 - Yosys + Nangate45 综合在 Yosys 0.52 上运行通过（ABC fast + 驱动强度提升，
   2-word TCM 时序配置）。OpenSTA 3.1.0 50 MHz pre-CTS 为 **MET**：setup +16.01 ns，
   hold +0.058 ns，TNS/WNS 0.00（理想时钟；CTS 后需复查 hold）。

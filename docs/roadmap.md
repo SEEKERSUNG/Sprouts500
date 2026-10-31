@@ -11,6 +11,8 @@
 - 裸机 SoC demo：UART hello、GPIO、三次定时器中断。
 - cocotb 套件：SoC/外设 72 项 + core 微架构 64 项，含随机与定向测试。
 - riscv-dv + Sail 指令级随机 lockstep 验证（含定向陷阱镜像）。
+- benchmark 软件优化：CoreMark best 142.14（2.84 CoreMark/MHz）；
+  Dhrystone ground 65,696（37.4 DMIPS）、best 124,345 Dhrystones/s（70.8 DMIPS）。
 - Yosys + Nangate45 综合流程和 Nangate45 Liberty。
 - OpenSTA 3.1.0 pre-CTS 50 MHz timing MET（setup +16.01 ns，hold +0.058 ns，
   TNS/WNS 0.00）。
