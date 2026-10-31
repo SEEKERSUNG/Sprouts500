@@ -2,24 +2,24 @@
 
 ## 已完成
 
-- 五级 RV32IM core，带 ITCM/DTCM、基于停顿的相关处理、WB->ID 旁路。
+- 五级 RV32IM core，带 ITCM/DTCM、EX/MEM->ID 前递、IF 级 BTB 分支预测。
 - 机器模式 CSR、陷阱、定时器/软件/外部中断、`mret`。
 - M 扩展：单周期乘法、迭代除法/余数。
 - 简易总线，带字节 strobe、ready 握手、连续事务分离。
 - 定时器、GPIO、UART、SPI 外设和 SoC top。
 - 官方 `riscv-arch-test` 2.x RV32I/M：46/46 通过。
 - 裸机 SoC demo：UART hello、GPIO、三次定时器中断。
-- cocotb 套件：SoC/外设 72 项 + core 微架构 43 项，含随机与定向测试。
+- cocotb 套件：SoC/外设 72 项 + core 微架构 64 项，含随机与定向测试。
 - riscv-dv + Sail 指令级随机 lockstep 验证（含定向陷阱镜像）。
 - Yosys + Nangate45 综合流程和 Nangate45 Liberty。
-- OpenSTA 3.1.0 pre-CTS 50 MHz timing MET（setup +15.94 ns，hold +0.058 ns，
+- OpenSTA 3.1.0 pre-CTS 50 MHz timing MET（setup +16.01 ns，hold +0.058 ns，
   TNS/WNS 0.00）。
 - Ubuntu-first 脚本和文档。
 
 ## 后续优先级
 
 1. **Post-CTS / 完整时序签核**
-   - 当前 50 MHz pre-CTS 结果：setup +15.94 ns，hold +0.058 ns，TNS/WNS 0.00
+   - 当前 50 MHz pre-CTS 结果：setup +16.01 ns，hold +0.058 ns，TNS/WNS 0.00
      （OpenSTA 3.1.0，理想时钟，2-word TCM 时序配置，ABC fast + upsize）。
    - CTS 后重新跑 hold；加入真正的 resizer/buffer tree。
    - 用 SRAM 宏 + Liberty RAM 模型替换推断 TCM 并重跑。
@@ -42,8 +42,9 @@
    - 定时器预分频/单次/周期边界情况。
 
 5. **性能（可选）**
-   - 增加 EX/MEM->ID 前递，消除 2 周期 RAW 停顿。
-   - 考虑在 ID 解析分支，或加一个小分支缓冲。
+   - ~~增加 EX/MEM->ID 前递~~（已完成）。
+   - ~~小分支缓冲~~（已完成：32 项 BTB + 2-bit 计数器）。
+   - 后续可选：返回地址栈（RAS）改善函数返回的预测、更大/关联 BTB。
    - 保持设计最简；性能工作不能破坏 46/46 门禁。
 
 6. **调试 / 集成（可选）**

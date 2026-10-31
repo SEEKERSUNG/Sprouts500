@@ -16,7 +16,8 @@ Every case runs one short program and checks cycle-level signals through
   not-taken branch must still fall through correctly.
 * ``jalr``       - ``jalr`` behind a load-use stall jumps to the loaded address
   with bit 0 cleared and its link register (``x1``) equals ``jalr_pc + 4``;
-  the target consumes ``x1`` immediately, exercising the link bypass.
+  the target consumes ``x1`` immediately, exercising EX/MEM->ID forwarding
+  of the link (a load producer would stall; a link producer must not).
 * ``div``        - a divider in EX freezes the pipeline for its latency:
   ``div_busy``/``pipe_freeze`` are counted, the divide retires exactly once,
   and the quotient/remainder plus their immediate consumers are checked.
@@ -90,7 +91,7 @@ def build_hold(seed):
         a.xor(7, 5, 6)                      # queued behind the consumer
         a.add(2, 2, 7)
         a.nop()
-        a.addi(8, 5, 1)                     # load by now in WB: bypass
+        a.addi(8, 5, 1)                     # load long retired: regfile read
         a.add(2, 2, 8)
     a.halt()
     return a.assemble(), a.halt_store_pc, {"dtcm": dtcm}
@@ -245,9 +246,10 @@ async def tcm_stall(dut):
     await h.reset()
     stats = {"raw_stall": 0, "IF_ID_hold": 0, "div_busy": 0, "pipe_freeze": 0,
              "mem_dtcm_we": 0, "mem_itcm_we": 0, "id_flush_q": 0,
-             "wb_repeat": 0}
+             "ex_pred_mispredict": 0, "wb_repeat": 0}
     frozen_mem = {"store_frozen_cycles": 0, "div_busy_mem_overlap": False,
-                  "store_mem_we_cycles": 0}
+                  "store_mem_we_cycles": 0, "branch_pred": [],
+                  "branch_flush": None}
 
     def cycle_hook(hh):
         if case == "div_freeze_store" and hh.div_busy and hh.MEM_valid:
@@ -257,6 +259,17 @@ async def tcm_stall(dut):
         if (case == "itcm_store" and hh.mem_itcm_we
                 and hh.MEM_PC == exp["store_pc"]):
             frozen_mem["store_mem_we_cycles"] += 1
+        if (case == "branch" and hh.EX_valid
+                and hh.EX_PC == exp["branch_pc"]):
+            frozen_mem["branch_pred"].append(
+                (hh.EX_pred_taken, hh.ex_ctrl_actual, hh.ex_pred_mispredict,
+                 hh.btb_we))
+        # id_flush_q is registered from redirect, so the cycle after the
+        # branch's EX mispredict is the one that must hold ID invalid; the
+        # branch itself then sits in MEM.
+        if (case == "branch" and hh.MEM_valid
+                and hh.MEM_PC == exp["branch_pc"]):
+            frozen_mem["branch_flush"] = hh.id_flush_q
 
     trace = await h.run_with_trace(halt_pc, max_cycles=60_000, stats=stats,
                                    cycle_hook=cycle_hook)
@@ -275,6 +288,9 @@ def _case_checks(h, case, exp, stats, pcs, frozen_mem):
         consume = exp["consume_pc"]
         expect(pcs.count(consume) == 1,
                f"consumer 0x{consume:x} retired {pcs.count(consume)} times")
+        # Distance-0 load-use: the consumer waits in ID while the load is in
+        # EX, then in MEM.  EX/MEM->ID forwarding deliberately excludes load
+        # producers, so both cycles remain (measured exactly 2).
         expect(stats["raw_stall"] >= 2,
                f"raw_stall only {stats['raw_stall']} cycle(s) for a load-use "
                f"pair (expected EX and MEM dependency cycles)")
@@ -282,14 +298,59 @@ def _case_checks(h, case, exp, stats, pcs, frozen_mem):
         expect(h.reg(5) == 0 and h.reg(6) == 1, "consumer got a wrong operand")
         expect(h.reg(2) == 1, "accumulator did not sum the consumer result")
     elif case == "hold":
-        expect(stats["raw_stall"] >= 20,
+        # Each of the 30 chains is a distance-0 load-use pair, so forwarding
+        # leaves exactly two raw_stall cycles per chain (measured 60).  The
+        # old >20 bound predates forwarding but stays as the lower bound.
+        expect(stats["raw_stall"] >= 2 * 30,
                f"only {stats['raw_stall']} raw_stall cycles for 30 load-use "
-               f"chains")
-        expect(stats["IF_ID_hold"] >= 20,
-               f"only {stats['IF_ID_hold']} IF_ID_hold cycles")
+               f"chains (each distance-0 pair needs 2)")
+        expect(stats["IF_ID_hold"] >= stats["raw_stall"],
+               f"only {stats['IF_ID_hold']} IF_ID_hold cycles for "
+               f"{stats['raw_stall']} stall cycles")
     elif case == "branch":
-        expect(stats["raw_stall"] >= 1, "taken branch case stalled no load")
-        expect(stats["id_flush_q"] >= 1, "id_flush_q never asserted")
+        # The bne consumes the preceding load at distance 0: still two stalls
+        # after forwarding (load producers are never forwarded).
+        expect(stats["raw_stall"] >= 2,
+               f"bne behind a load-use pair stalled only "
+               f"{stats['raw_stall']} cycle(s); the branch did not wait for "
+               f"its load")
+        # The branch is executed once, with the BTB entry still empty: the IF
+        # lookup predicts not-taken, the taken branch directs the redirect and
+        # trains the entry.  So the flush is still required (a second
+        # execution of the same PC would be predicted taken and would not
+        # flush).  This pins the cold-mispredict path, not just the flush.
+        rec = frozen_mem["branch_pred"]
+        expect(len(rec) == 1,
+               f"branch case: the bne at 0x{exp['branch_pc']:08x} was seen in "
+               f"EX {len(rec)} time(s), expected exactly 1")
+        pred, actual, misp, we = rec[0]
+        expect(pred == 0 and actual == 1,
+               f"branch case: EX_pred_taken={pred} ex_ctrl_actual={actual} for "
+               f"the untrained taken bne, expected 0/1")
+        expect(misp == 1,
+               "branch case: the cold taken bne did not mispredict; the "
+               "prediction path is not active")
+        expect(we == 1,
+               "branch case: the cold taken bne did not train the BTB")
+        expect(stats["ex_pred_mispredict"] >= 1,
+               "branch case: ex_pred_mispredict never asserted")
+        # The redirect is registered into id_flush_q, so the cycle in which
+        # the mispredicted branch sits in MEM is exactly the cycle ID must be
+        # held invalid (measured 1).
+        expect(frozen_mem["branch_flush"] == 1,
+               f"branch case: id_flush_q={frozen_mem['branch_flush']!r} in the "
+               f"cycle after the taken bne redirect, expected exactly 1")
+        # Whole program, measured 3/3: the cold taken bne above, the cold
+        # ``jal after_never`` and the halt-spin ``jal x0, 0`` each mispredict
+        # once and each registers exactly one id_flush_q cycle.  With no
+        # trap/freeze in this program, flush cycles and mispredict cycles
+        # must match one for one.
+        expect(stats["id_flush_q"] == stats["ex_pred_mispredict"] == 3,
+               f"branch case: id_flush_q={stats['id_flush_q']} != "
+               f"ex_pred_mispredict={stats['ex_pred_mispredict']} (or either "
+               f"!= the measured 3 redirects: the cold bne, the cold jal, and "
+               f"the halt-spin jal); the cold taken branch must redirect and "
+               f"flush the younger slots exactly once")
         for pc in exp["poison_pcs"]:
             expect(pc not in pcs,
                    f"flushed instruction at 0x{pc:08x} retired")
@@ -298,7 +359,12 @@ def _case_checks(h, case, exp, stats, pcs, frozen_mem):
                f"dead-path add wrote the register")
         expect(h.reg(7) == exp["x7"], f"x7={h.reg(7)!r} != {exp['x7']}")
     elif case == "jalr":
-        expect(stats["raw_stall"] >= 1, "jalr case stalled no load")
+        # jalr consumes the load at distance 0 (2 stalls); the later load-use
+        # pair adds 2 more (measured 4, link forwarding contributes none).
+        expect(stats["raw_stall"] >= 2,
+               f"jalr behind a load-use pair stalled only "
+               f"{stats['raw_stall']} cycle(s); the jalr did not wait for "
+               f"its loaded target")
         expect(exp["skipped_pc"] not in pcs,
                "instruction after jalr retired (redirect missed)")
         target_pc = exp["target_pc"]

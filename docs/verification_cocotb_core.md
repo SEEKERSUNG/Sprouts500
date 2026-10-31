@@ -25,7 +25,7 @@ bash scripts/run_cocotb.sh cocotb/core    # 推荐：统一日志/退出码
 期望（默认 3 个随机种子）：
 
 ```text
-43 passed
+64 passed
 ```
 
 只跑一个文件或一个用例：
@@ -39,13 +39,14 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 - `COCOTB_SEEDS`（默认 3）控制随机测试文件的 pytest 参数个数。随机文件是
   `test_exec_rand.py`、`test_branch_rand.py`、`test_m_ext.py`、`test_mem_rand.py`、
   `test_hazard.py`；每个种子启动一次独立仿真。定向文件（`test_csr_trap.py`、
-  `test_interrupt.py`、`test_bus.py`、`test_tcm_stall.py`）不受它影响。
+  `test_interrupt.py`、`test_bus.py`、`test_tcm_stall.py`、`test_forward.py`、
+  `test_branch_pred.py`）不受它影响。
 - `test_hazard.py` / `test_mem_rand.py` 等还会读取仿真内的 `TB_SEED`；pytest
   参数与仿真种子一致，失败消息里会打印种子。
 - 构建产物：`build/cocotb_core/sim_build/`；cocotb 结果 XML：
   `build/cocotb_core/results/`。Icarus 增量编译，RTL/TB 不变时只有第一次慢。
 - 验证环境（Ubuntu 26.04，Icarus 12，cocotb 2.1.0，Python 3.14）默认 3 个种子约
-  **16 秒**跑完 43 项。
+  **23 秒**跑完 64 项。
 
 依赖：`.venv` 内安装 cocotb 2.1.0 与 pytest；Icarus 12 需在 `PATH` 中。core 套件的
 辅助代码全部在 `cocotb/core/_helpers.py` 内，不 import `cocotb/common/`。
@@ -87,8 +88,8 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 
 ## 3. 测试与架构不变量的对应
 
-`docs/architecture.md` §9 的编号如下（本套件覆盖 1–9；10 属于 ISA testbench 的
-4 MiB ITCM，与本套件无关）。
+`docs/architecture.md` §9 的编号如下（本套件覆盖 1–4、6–9、11–14；5 属于
+外设套件，10 属于 ISA testbench 的 4 MiB ITCM）。
 
 | 文件 | 用例数（默认种子） | 主要目标 |
 |---|---|---|
@@ -96,19 +97,25 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | `test_branch_rand.py` | 3 | 随机 BRANCH/JAL/JALR、前向/后向循环、`org` 重定位覆盖镜像；冲刷正确性 |
 | `test_m_ext.py` | 3 | mul/mulh/mulhsu/mulhu/div/divu/rem/remu；除零/溢出/负数边界 |
 | `test_mem_rand.py` | 3 | ITCM/DTCM 全宽度 load/store 随机流；字节级内存 scoreboard |
-| `test_hazard.py` | 3 | 各流水级距离的 RAW、load-use、x0 先于旁路、div 冻结 |
+| `test_hazard.py` | 3 | EX/MEM 前递距离、load-use、x0 先于所有旁路、div 冻结 |
 | `test_csr_trap.py` | 9 | CSR 读旧/写新、只读 CSR、ecall/ebreak/illegal、访存/分支/jalr 非对齐 |
 | `test_interrupt.py` | 7 | 三源优先级、屏蔽、全局使能、vectored、div 期间不取中断 |
 | `test_bus.py` | 5 | 总线事务、等待冻结、`bus_conflict`、慢读、CSR 单次提交 |
 | `test_tcm_stall.py` | 7 | load-use 停顿深度、`IF_ID_hold`、`id_flush_q`、jalr link、div 冻结、TCM 写门控 |
+| `test_forward.py` | 12 | EX/MEM 距离的 ALU/mul/CSR/link/store/branch 前递、优先级、load-use 深度、div、trap 取消 |
+| `test_branch_pred.py` | 9 | BTB 训练/饱和、交替方向、嵌套/自循环、异常/中断不训练、JALR 目标变化、陈旧项、冻结 |
 
 逐条对应：
 
 | §9 不变量 | 覆盖用例 |
 |---|---|
 | 1 `IF_ID_IR_hold`/`IF_ID_PC_hold`/`IF_ID_hold` | `test_tcm_stall[load_use,hold]`、`test_hazard`、`test_mem_rand`、所有 trace 比较 |
-| 2 重定向后 `id_flush_q` | `test_tcm_stall[branch]`、`test_branch_rand` |
-| 3 x0 判断先于 WB 旁路 | `test_hazard`（定向 `addi x0` 后立即读 x0）、`test_exec_rand` |
+| 11 预测纠错走单一 `redirect`/`redirect_pc` | `test_branch_pred` 全部用例、`test_branch_rand` |
+| 12 `IF_ID_pred_*_hold` 保存寄存后的 `IF_pred_*_q` | `test_branch_pred[stall_freeze,nested_loop]`、`test_tcm_stall[hold]` |
+| 13 2-bit 计数器饱和；valid/计数器复位；陈旧项纠正 | `test_branch_pred[loop_taken,self_loop,stale_noncontrol,exception_no_train]` |
+| 14 只有 load/未完成除法停顿；x0 在前递之前 | `test_forward` 全部用例、`test_hazard` |
+| 2 重定向后 `id_flush_q` | `test_tcm_stall[branch]`、`test_branch_rand`、`test_branch_pred`（错误预测/陷阱/`mret` 都走该序列） |
+| 3 x0 判断先于所有前递/旁路 | `test_forward[x0]`、`test_hazard`、`test_exec_rand` |
 | 4 除法结果选择 `EX_funct3[1]` | `test_m_ext`、`test_tcm_stall[div]`、`test_interrupt[div_before_irq]` |
 | 5 定时器 W1C bit 2 | 不在本套件：属 `cocotb/soc/` 与 demo |
 | 6 `bus_conflict` 分隔连续事务 | `test_bus[back_to_back,rand_stores,rand_loads]` |
@@ -123,7 +130,8 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 
 - `test_hazard`：每个种子 120 组生产者/消费者，随机 0–3 个 nop 距离，统计
   `raw_stall`、`IF_ID_hold`、`div_busy`、`pipe_freeze`、`wb_repeat`，并要求全部
-  trace、寄存器、DTCM 与参考模型一致。
+  trace、寄存器、DTCM 与参考模型一致；静态 oracle 计算 load-use 对数，并检查每个
+  非除法 `raw_stall` 周期都有 load 生产者。
 - `test_branch_rand`：同一仿真内先跑链接镜像，再把以不同 origin 汇编的覆盖镜像
   拷入入口并**再次复位**；复位状态泄漏或冲刷遗漏都会在 trace 上立刻显形。
 - `test_bus[slow_read]`：从设备对目标地址保持 6 拍 `bus_ready=0`，核对

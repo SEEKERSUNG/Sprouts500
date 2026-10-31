@@ -765,6 +765,130 @@ class CoreHarness:
     @property
     def IF_ID_hold(self): return self.sig("IF_ID_hold")
 
+    # -- branch prediction observability (rtl/core.v ``Branch prediction``) --
+    # Read-only taps into the BTB and the IF/ID/EX prediction plumbing.
+    # ``btb_*``, ``EX_pred_*`` and ``ex_pred_mispredict``/``btb_we``/``redirect``
+    # are combinational; ``IF_pred_*_q`` are registered with ``if_rdata_q``.
+    # BTB geometry mirrors the RTL localparam BTB_IBITS=5 (32 entries).
+    BTB_IBITS = 5
+    BTB_NUM = 1 << BTB_IBITS
+
+    @staticmethod
+    def btb_index(pc):
+        return (pc >> 2) & ((1 << CoreHarness.BTB_IBITS) - 1)
+
+    @staticmethod
+    def btb_tag_of(pc):
+        return (pc & MASK32) >> (CoreHarness.BTB_IBITS + 2)
+
+    def btb_entry(self, idx):
+        """(valid, tag, target, cnt) of BTB entry ``idx``; entries are raw."""
+        return (handle_int(self.core.btb_valid[idx]),
+                handle_int(self.core.btb_tag[idx]),
+                handle_int(self.core.btb_target[idx]),
+                handle_int(self.core.btb_cnt[idx]))
+
+    def btb_find(self, pc):
+        """(hit, target, cnt) as seen by the IF lookup of ``pc``.
+
+        ``hit`` is False when the entry is invalid or its tag differs;
+        ``cnt``/``target`` are None only on X/Z.
+        """
+        pc &= MASK32
+        idx = self.btb_index(pc)
+        valid, tag, target, cnt = self.btb_entry(idx)
+        hit = bool(valid) and tag == self.btb_tag_of(pc)
+        return (hit, target, cnt)
+
+    @property
+    def btb_valid(self): return handle_int(self.core.btb_valid)
+
+    @property
+    def btb_pred_taken(self): return self.sig("btb_pred_taken")
+
+    @property
+    def btb_pred_target(self): return self.sig("btb_pred_target")
+
+    @property
+    def IF_pred_taken_q(self): return self.sig("IF_pred_taken_q")
+
+    @property
+    def IF_pred_target_q(self): return self.sig("IF_pred_target_q")
+
+    @property
+    def ID_pred_taken(self): return self.sig("ID_pred_taken")
+
+    @property
+    def ID_pred_target(self): return self.sig("ID_pred_target")
+
+    @property
+    def EX_pred_taken(self): return self.sig("EX_pred_taken")
+
+    @property
+    def EX_pred_target(self): return self.sig("EX_pred_target")
+
+    @property
+    def ex_pred_mispredict(self): return self.sig("ex_pred_mispredict")
+
+    @property
+    def ex_ctrl_actual(self): return self.sig("ex_ctrl_actual")
+
+    @property
+    def ex_target(self): return self.sig("ex_target")
+
+    @property
+    def ex_exception(self): return self.sig("ex_exception")
+
+    @property
+    def btb_we(self): return self.sig("btb_we")
+
+    @property
+    def redirect(self): return self.sig("redirect")
+
+    @property
+    def redirect_pc(self): return self.sig("redirect_pc")
+
+    @property
+    def id_flush_q(self): return self.sig("id_flush_q")
+
+    # EX/MEM->ID forwarding observability (rtl/core.v ``ex_fwd_ok`` /
+    # ``mem_fwd_ok``).  Read-only taps; ``sig`` returns None on X/Z.
+    @property
+    def EX_rd(self): return self.sig("EX_rd")
+
+    @property
+    def EX_rd_write_req(self): return self.sig("EX_rd_write_req")
+
+    @property
+    def EX_mem_read(self): return self.sig("EX_mem_read")
+
+    @property
+    def ex_result(self): return self.sig("ex_result")
+
+    @property
+    def ex_fwd_ok(self): return self.sig("ex_fwd_ok")
+
+    @property
+    def MEM_rd(self): return self.sig("MEM_rd")
+
+    @property
+    def MEM_rd_write_req(self): return self.sig("MEM_rd_write_req")
+
+    @property
+    def MEM_mem_read(self): return self.sig("MEM_mem_read")
+
+    @property
+    def MEM_result(self): return self.sig("MEM_result")
+
+    @property
+    def mem_fwd_ok(self): return self.sig("mem_fwd_ok")
+
+    @property
+    def id_rs1_data(self): return self.sig("id_rs1_data")
+
+    @property
+    def id_rs2_data(self): return self.sig("id_rs2_data")
+
     @property
     def mstatus(self): return self.sig("mstatus")
 

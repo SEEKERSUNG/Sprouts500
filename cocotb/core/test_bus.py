@@ -14,7 +14,9 @@ What is targeted (``docs/architecture.md`` §6.2, §9 item 6; the
   ``unexpected_rise_while_active``);
 * ``bus_conflict`` (rtl/core.v:669) inserts a bubble between back-to-back bus
   accesses: ``bus_req`` must fall for one cycle between two transactions;
-* a read result is captured once (rtl/core.v:780-783) and forwarded through WB;
+* a read result is captured once (rtl/core.v:780-783); loads are not
+  forwarded by EX/MEM->ID forwarding, so a consumer waits through
+  ``raw_stall`` and reads the result via the WB bypass;
 * a word access must complete exactly once even when the slave never becomes
   ready on the first cycle.
 
@@ -109,7 +111,7 @@ def build_slow_read(seed=0):
     a.li(2, 0)
     a.li(20, BUS_BASE)
     a.lw(11, 20, 0x80)
-    a.addi(12, 11, 0)                   # consumes the load via WB bypass
+    a.addi(12, 11, 0)                   # distance-0 load-use: stall, WB bypass
     a.add(2, 11, 12)
     a.halt()
     return a.assemble(), a.halt_store_pc
@@ -244,7 +246,8 @@ async def bus(dut):
         expect(stats["bus_wait"] == txn.wait_cycles,
                f"bus_wait {stats['bus_wait']} cycles vs slave "
                f"{txn.wait_cycles} wait cycles")
-        expect(h.reg(11) == ref.regs[11], "slow load result not forwarded")
+        expect(h.reg(11) == ref.regs[11],
+               "slow load result did not reach the register file")
 
     if case == "rand_stores":
         stores = slave.writes

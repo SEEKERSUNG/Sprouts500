@@ -152,10 +152,17 @@ async def branch_rand(dut):
     h.load_program(words)
     await Timer(1, unit="ns")
     await h.reset()
-    stats = {"trap_taken": 0}
+    stats = {"trap_taken": 0, "ex_pred_mispredict": 0,
+             "IF_ID_hold": 0, "id_flush_q": 0}
     core_trace = await h.run_with_trace(halt_pc, max_cycles=40_000, stats=stats)
     core_pcs = [pc for pc, _ir in core_trace]
     expect(stats["trap_taken"] == 0, "unexpected trap during branch test")
+    # The image has cold ``jal``/``jalr`` calls and counted loops in every
+    # block, so the predictor must both miss (empty/target-changed entries)
+    # and train.  A zero count means the IF/EX prediction plumbing is dead.
+    expect(stats["ex_pred_mispredict"] > 0,
+           "ex_pred_mispredict never asserted over a random BRANCH/JAL/JALR "
+           "program; the prediction path is not exercised")
     expect(h.reg(0) in (0, None), "register file x0 was written")
     # Registers: only compare the counters that must be exact.
     for idx in (26, 27, 28, 29, 30):
@@ -183,5 +190,7 @@ async def branch_rand(dut):
         expect(got == ref_ov.regs[idx],
                f"overlay x{idx}: got {got!r} exp 0x{ref_ov.regs[idx]:08x}")
 
-    dut._log.info("branch_rand seed=%d: linked retired=%d, overlay retired=%d",
-                  seed, len(core_pcs), len(ov_pcs))
+    dut._log.info("branch_rand seed=%d: linked retired=%d overlay retired=%d "
+                  "mispredicts=%d id_flush_q=%d", seed, len(core_pcs),
+                  len(ov_pcs), stats["ex_pred_mispredict"],
+                  stats["id_flush_q"])

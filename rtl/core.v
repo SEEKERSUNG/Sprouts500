@@ -65,10 +65,38 @@ module core #(
     reg [31:0] bus_rdata_q;
 
     //--------------------------------------------------------------------------
+    // Branch prediction: tagged BTB with 2-bit saturating direction counters,
+    // predicted in IF so a correctly predicted taken branch/jump has no EX
+    // penalty.  This is performance-only: a wrong or stale prediction is
+    // corrected in EX through the normal redirect, and a wrong-path instruction
+    // can never reach MEM (EX is in-order).  Only valid bits and counters are
+    // reset: valid implies tag/target were written together, and the untagged
+    // EX-side counter read needs X-free counters in simulation.
+    //--------------------------------------------------------------------------
+    localparam        BTB_IBITS = 5;              // 32 entries
+    localparam        BTB_NUM   = (1 << BTB_IBITS);
+
+    reg [31:BTB_IBITS+2] btb_tag    [0:BTB_NUM-1];
+    reg [31:0]           btb_target [0:BTB_NUM-1];
+    reg [1:0]            btb_cnt    [0:BTB_NUM-1];
+    reg [BTB_NUM-1:0]    btb_valid;
+
+    //--------------------------------------------------------------------------
     // IF
     //--------------------------------------------------------------------------
     reg [31:0] IF_PC;
     reg [31:0] IF_PC_q;          // address of the word currently on if_rdata_q
+    reg        IF_pred_taken_q;  // prediction for IF_PC_q, paired with if_rdata_q
+    reg [31:0] IF_pred_target_q;
+
+    wire [BTB_IBITS-1:0]  if_pc_index = IF_PC[BTB_IBITS+1:2];
+    wire [31:BTB_IBITS+2] if_pc_tag   = IF_PC[31:BTB_IBITS+2];
+
+    wire btb_lu_hit = btb_valid[if_pc_index] && (btb_tag[if_pc_index] == if_pc_tag);
+    wire [1:0] btb_lu_cnt = btb_lu_hit ? btb_cnt[if_pc_index] : 2'b00;
+
+    wire        btb_pred_taken  = btb_lu_hit && btb_lu_cnt[1];
+    wire [31:0] btb_pred_target = btb_lu_hit ? btb_target[if_pc_index] : 32'b0;
 
     //--------------------------------------------------------------------------
     // ID
@@ -77,15 +105,23 @@ module core #(
     reg [31:0] ID_IR;
     reg        ID_valid;
     reg        id_flush_q;
+    reg        ID_pred_taken;
+    reg [31:0] ID_pred_target;
 
     // During a stall the instruction already presented by IF (IF_PC_q /
     // if_rdata_q) must be preserved; otherwise IF would overwrite it with the
-    // next fetch while ID is held.
+    // next fetch while ID is held.  The prediction metadata moves with it, and
+    // must come from the registered IF_pred_*_q (the lookup of IF_PC, which is
+    // one instruction ahead), never from the live lookup.
     reg [31:0] IF_ID_IR_hold;
     reg [31:0] IF_ID_PC_hold;
     reg        IF_ID_hold;
+    reg        IF_ID_pred_taken_hold;
+    reg [31:0] IF_ID_pred_target_hold;
     wire [31:0] id_capture_ir = IF_ID_hold ? IF_ID_IR_hold : if_rdata_q;
     wire [31:0] id_capture_pc = IF_ID_hold ? IF_ID_PC_hold : IF_PC_q;
+    wire        id_capture_pred_taken  = IF_ID_hold ? IF_ID_pred_taken_hold  : IF_pred_taken_q;
+    wire [31:0] id_capture_pred_target = IF_ID_hold ? IF_ID_pred_target_hold : IF_pred_target_q;
 
     wire [31:0] id_ir = ID_valid ? ID_IR : NOP;
 
@@ -326,6 +362,8 @@ module core #(
     reg [31:0] EX_PC;
     reg [31:0] EX_IR;
     reg        EX_valid;
+    reg        EX_pred_taken;    // prediction this instruction was fetched with
+    reg [31:0] EX_pred_target;
     reg [6:0]  EX_opcode;
     reg [2:0]  EX_funct3;
     reg [6:0]  EX_funct7;
@@ -683,12 +721,49 @@ module core #(
                               (mtvec_base + {trap_cause[29:0], 2'b00}) : mtvec_base;
 
     wire mret_taken = EX_valid && EX_mret && !trap_taken && !pipe_freeze;
-    wire control_redirect = ex_control && !ex_target_misaligned &&
-                            !ex_exception && !trap_taken && !pipe_freeze;
 
-    wire redirect = trap_taken || mret_taken || control_redirect;
+    //--------------------------------------------------------------------------
+    // Branch prediction resolution
+    //--------------------------------------------------------------------------
+    wire [BTB_IBITS-1:0]  ex_pc_index = EX_PC[BTB_IBITS+1:2];
+    wire [31:BTB_IBITS+2] ex_pc_tag   = EX_PC[31:BTB_IBITS+2];
+
+    wire ex_ctrl_actual = EX_jump || (EX_branch && ex_branch_taken);
+    wire ex_ctrl_class  = EX_jump || EX_branch;
+
+    // Compare against the prediction this instruction was fetched with
+    // (EX_pred_*), not a fresh lookup: the entry may have been rewritten.
+    wire ex_pred_ok = EX_valid && EX_pred_taken && ex_ctrl_actual &&
+                      (ex_target == EX_pred_target);
+    // Correct a wrong direction, a wrong target, or a stale entry on a
+    // non-control (e.g. patched code).  Not on traps (misaligned targets trap
+    // and must not be corrected or trained), not during a freeze.
+    wire ex_pred_mispredict = EX_valid && !ex_exception && !trap_taken &&
+                              !pipe_freeze && !bus_conflict &&
+                              (EX_pred_taken ? !ex_pred_ok : ex_ctrl_actual);
+
+    // Training: one write port.  A taken control stores tag/target/valid; the
+    // counter is updated on every resolved conditional branch (saturating, and
+    // only when the entry is already valid for a not-taken branch).
+    wire ex_ctrl_resolved = EX_valid && ex_ctrl_class && !ex_exception &&
+                            !trap_taken && !pipe_freeze;
+    wire btb_we = ex_ctrl_resolved &&
+                  (ex_ctrl_actual || btb_valid[ex_pc_index]);
+    wire [1:0] btb_cnt_inc = (btb_cnt[ex_pc_index] == 2'b11) ? 2'b11 :
+                             btb_cnt[ex_pc_index] + 2'd1;
+    wire [1:0] btb_cnt_dec = (btb_cnt[ex_pc_index] == 2'b00) ? 2'b00 :
+                             btb_cnt[ex_pc_index] - 2'd1;
+    wire [1:0] btb_wcnt = EX_jump ? 2'b11 :
+                          ex_ctrl_actual ? (btb_valid[ex_pc_index] ?
+                                            btb_cnt_inc : 2'b10) :
+                          btb_cnt_dec;
+
+    // A stale entry on a non-control redirects to the fall-through address.
+    wire redirect = trap_taken || mret_taken || ex_pred_mispredict;
     wire [31:0] redirect_pc = trap_taken ? trap_vector :
-                              mret_taken ? mepc : ex_target;
+                              mret_taken ? mepc :
+                              ((EX_pred_taken && !ex_ctrl_actual) ?
+                               (EX_PC + 32'd4) : ex_target);
 
     // register file
     reg [31:0] regfiles [0:31];
@@ -721,19 +796,36 @@ module core #(
         end
     end
 
-    // read operands with WB bypass (x0 is hardwired)
+    // Read operands with EX/MEM->ID forwarding, then the WB bypass, and x0
+    // hardwired ahead of all of them.  EX is younger than MEM, so EX wins.
+    // Load producers are never forwarded: their data is only registered at the
+    // MEM->WB edge (mem_*_rdata_q / bus_rdata_q), so raw_stall covers them.
+    // A divider in EX has ex_result == 0 until DIV_DONE (div_busy freezes ID
+    // before that point, but gate explicitly).
+    wire ex_fwd_ok  = EX_valid && EX_rd_write_req && !EX_mem_read &&
+                      !(ex_is_div && (div_state != DIV_DONE));
+    wire mem_fwd_ok = MEM_valid && MEM_rd_write_req && !MEM_mem_read;
+
     wire [31:0] id_rs1_data = (id_rs1 == 5'd0) ? 32'b0 :
+                              (ex_fwd_ok  && (EX_rd  != 5'd0) && (EX_rd  == id_rs1)) ? ex_result :
+                              (mem_fwd_ok && (MEM_rd != 5'd0) && (MEM_rd == id_rs1)) ? MEM_result :
                               (WB_valid && WB_rd_write_req && (WB_rd == id_rs1)) ?
                               wb_rd_data : regfiles[id_rs1];
     wire [31:0] id_rs2_data = (id_rs2 == 5'd0) ? 32'b0 :
+                              (ex_fwd_ok  && (EX_rd  != 5'd0) && (EX_rd  == id_rs2)) ? ex_result :
+                              (mem_fwd_ok && (MEM_rd != 5'd0) && (MEM_rd == id_rs2)) ? MEM_result :
                               (WB_valid && WB_rd_write_req && (WB_rd == id_rs2)) ?
                               wb_rd_data : regfiles[id_rs2];
 
-    // hazard: stall ID while an older instruction has not reached WB
+    // Hazard: only load producers cannot be forwarded, so only they stall ID.
+    // A load in EX is caught by id_dep_ex, one in MEM by id_dep_mem; the data
+    // is then available through the WB bypass two cycles later (load-use).
     wire id_dep_ex = ID_valid && EX_valid && EX_rd_write_req && (EX_rd != 5'd0) &&
+                     (EX_mem_read || (ex_is_div && (div_state != DIV_DONE))) &&
                      ((id_uses_rs1 && (id_rs1 == EX_rd)) ||
                       (id_uses_rs2 && (id_rs2 == EX_rd)));
-    wire id_dep_mem = ID_valid && MEM_valid && MEM_rd_write_req && (MEM_rd != 5'd0) &&
+    wire id_dep_mem = ID_valid && MEM_valid && MEM_rd_write_req && MEM_mem_read &&
+                      (MEM_rd != 5'd0) &&
                       ((id_uses_rs1 && (id_rs1 == MEM_rd)) ||
                        (id_uses_rs2 && (id_rs2 == MEM_rd)));
     wire raw_stall = id_dep_ex || id_dep_mem;
@@ -752,6 +844,7 @@ module core #(
 
     integer i_itcm;
     integer i_dtcm;
+    integer i_btb;
 
     always @(posedge clk) begin
         if (mem_itcm_we) begin
@@ -780,6 +873,21 @@ module core #(
     always @(posedge clk) begin
         if (!pipe_freeze && mem_bus_access && MEM_mem_read && bus_ready_i)
             bus_rdata_q <= bus_rdata_i;
+    end
+
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            btb_valid <= {BTB_NUM{1'b0}};
+            for (i_btb = 0; i_btb < BTB_NUM; i_btb = i_btb + 1)
+                btb_cnt[i_btb] <= 2'b00;
+        end else if (btb_we) begin
+            btb_cnt[ex_pc_index] <= btb_wcnt;
+            if (ex_ctrl_actual) begin
+                btb_valid[ex_pc_index]  <= 1'b1;
+                btb_tag[ex_pc_index]    <= ex_pc_tag;
+                btb_target[ex_pc_index] <= ex_target;
+            end
+        end
     end
 
     //--------------------------------------------------------------------------
@@ -814,12 +922,18 @@ module core #(
         if (!rstn) begin
             IF_PC   <= RESET_PC;
             IF_PC_q <= RESET_PC;
+            IF_pred_taken_q  <= 1'b0;
+            IF_pred_target_q <= 32'b0;
         end else begin
             IF_PC_q <= IF_PC;
+            IF_pred_taken_q  <= btb_pred_taken;
+            IF_pred_target_q <= btb_pred_target;
             if (redirect)
                 IF_PC <= redirect_pc;
             else if (pipe_freeze || raw_stall || bus_conflict)
                 IF_PC <= IF_PC;
+            else if (btb_pred_taken)
+                IF_PC <= btb_pred_target;
             else
                 IF_PC <= IF_PC + 32'd4;
         end
@@ -834,28 +948,40 @@ module core #(
             IF_ID_IR_hold <= NOP;
             IF_ID_PC_hold <= 32'b0;
             IF_ID_hold   <= 1'b0;
+            IF_ID_pred_taken_hold  <= 1'b0;
+            IF_ID_pred_target_hold <= 32'b0;
+            ID_pred_taken  <= 1'b0;
+            ID_pred_target <= 32'b0;
         end else if (redirect) begin
             ID_PC         <= 32'b0;
             ID_IR         <= NOP;
             ID_valid      <= 1'b0;
             id_flush_q    <= 1'b1;
             IF_ID_hold    <= 1'b0;
+            ID_pred_taken  <= 1'b0;
+            ID_pred_target <= 32'b0;
         end else if (id_flush_q) begin
             ID_PC         <= 32'b0;
             ID_IR         <= NOP;
             ID_valid      <= 1'b0;
             id_flush_q    <= 1'b0;
             IF_ID_hold    <= 1'b0;
+            ID_pred_taken  <= 1'b0;
+            ID_pred_target <= 32'b0;
         end else if (pipe_freeze || raw_stall || bus_conflict) begin
             if (!IF_ID_hold) begin
                 IF_ID_IR_hold <= id_capture_ir;
                 IF_ID_PC_hold <= id_capture_pc;
+                IF_ID_pred_taken_hold  <= IF_pred_taken_q;
+                IF_ID_pred_target_hold <= IF_pred_target_q;
                 IF_ID_hold    <= 1'b1;
             end
         end else begin
             ID_PC     <= id_capture_pc;
             ID_IR     <= id_capture_ir;
             ID_valid  <= 1'b1;
+            ID_pred_taken  <= id_capture_pred_taken;
+            ID_pred_target <= id_capture_pred_target;
             IF_ID_hold <= 1'b0;
         end
     end
@@ -865,6 +991,8 @@ module core #(
             EX_PC           <= 32'b0;
             EX_IR           <= NOP;
             EX_valid        <= 1'b0;
+            EX_pred_taken   <= 1'b0;
+            EX_pred_target  <= 32'b0;
             EX_opcode       <= 7'b0;
             EX_funct3       <= 3'b0;
             EX_funct7       <= 7'b0;
@@ -903,6 +1031,8 @@ module core #(
             EX_PC           <= ID_PC;
             EX_IR           <= ID_IR;
             EX_valid        <= ID_valid && !redirect && !raw_stall;
+            EX_pred_taken   <= ID_pred_taken;
+            EX_pred_target  <= ID_pred_target;
             EX_opcode       <= id_opcode;
             EX_funct3       <= id_funct3;
             EX_funct7       <= id_funct7;

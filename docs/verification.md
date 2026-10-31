@@ -12,14 +12,14 @@ python3 scripts/run_isa.py     # 期望：46/46 通过
 bash scripts/build_demo.sh     # 期望：TEST_PASS
 bash scripts/build_app.sh sw/example   # 自写 C 运行时；期望 TEST_PASS
 bash scripts/setup_cocotb.sh   # 一次性：.venv + cocotb/pytest（需要 python3.14-dev）
-bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 43 全部通过
+bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 64 全部通过
 bash scripts/setup_riscv_dv.sh # 一次性：.venv-dv + Sail；见 docs/verification_riscv_dv.md
 bash scripts/run_riscv_dv.sh   # 期望：随机种子全部 lockstep PASS
 bash scripts/synth.sh          # 期望：Yosys 完成并写出 build/syn/core_netlist.v
 bash scripts/sta.sh            # 在 sudo bash scripts/setup_opensta.sh 之后；期望 setup/hold MET
 ```
 
-`scripts/sta.sh` 在 50 MHz 下当前报告 setup **+15.94 ns**、hold **+0.058 ns**、
+`scripts/sta.sh` 在 50 MHz 下当前报告 setup **+16.01 ns**、hold **+0.058 ns**、
 TNS/WNS **0.00**（OpenSTA 3.1.0，理想时钟，2-word TCM 时序配置）。时钟尚未做 CTS，
 因此 CTS 后以及换用 SRAM 宏后需要重新跑 hold 签核。
 
@@ -245,9 +245,9 @@ Plusarg：`+ITCM_HEX=`、`+MAX_CYCLES=`、`+VCD`。
 
 `bash scripts/synth.sh` 在 CPU 时序运行时把 ITCM/DTCM 设为 2 word，依次运行
 `synth`、`dfflibmap`、`abc -fast -liberty`，写出结构网表，然后运行
-`scripts/upsize_fanout.py` 提升高扇出驱动的强度。该时序配置在提升前约 43.7k 个
+`scripts/upsize_fanout.py` 提升高扇出驱动的强度。该时序配置约 49.9k 个
 Nangate45 单元。`bash scripts/sta.sh` 随后报告 50 MHz pre-CTS 结果：setup
-+15.94 ns / hold +0.058 ns，TNS/WNS 0.00。完整签核必须用 SRAM 宏替换 TCM，并在 CTS
++16.01 ns / hold +0.058 ns，TNS/WNS 0.00。完整签核必须用 SRAM 宏替换 TCM，并在 CTS
 后重新检查 hold。如果 Yosys 报告推断 latch、多驱动或 `$mem` 单元，请先修 RTL 或脚本。
 
 ## 8. cocotb 与 riscv-dv 套件
@@ -266,5 +266,5 @@ Nangate45 单元。`bash scripts/sta.sh` 随后报告 50 MHz pre-CTS 结果：se
     未对齐访存、未对齐取指）。
   - 详见 `docs/verification_riscv_dv.md`。
 
-当前基线：cocotb **72 + 43 项通过**；riscv-dv + Sail 默认 3 个种子加定向镜像
+当前基线：cocotb **72 + 64 项通过**；riscv-dv + Sail 默认 3 个种子加定向镜像
 **4/4 `COMPARE_PASS`**。

@@ -201,11 +201,14 @@ module tb_lockstep;
         end
     end
 
-    // unmapped fetch detection
+    // Unmapped fetch detection.  IF is speculative under branch prediction, so
+    // check the non-speculative EX_PC instead of IF_PC: a wrong prediction is
+    // corrected before it can reach MEM.
     always @(posedge clk) begin
-        if (rstn && !done && dut.IF_PC[31:24] != 8'h00 && dut.IF_PC[31:24] != 8'h10) begin
+        if (rstn && !done && dut.EX_valid &&
+            dut.EX_PC[31:24] != 8'h00 && dut.EX_PC[31:24] != 8'h10) begin
             unmapped <= 1'b1;
-            unmapped_pc <= dut.IF_PC;
+            unmapped_pc <= dut.EX_PC;
             done <= 1'b1;
         end
     end

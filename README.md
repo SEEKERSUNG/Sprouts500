@@ -14,12 +14,12 @@
 |---|---|
 | RV32I/RV32M `riscv-arch-test` 2.x | **46/46 通过**（Ubuntu 26.04，GCC 14.2，Icarus 12） |
 | SoC demo：UART hello + 定时器中断 + GPIO | 通过（Ubuntu 26.04） |
-| cocotb 随机/定向验证 | SoC/外设 72 项 + core 微架构 43 项，全部通过 |
+| cocotb 随机/定向验证 | SoC/外设 72 项 + core 微架构 64 项，全部通过 |
 | riscv-dv + Sail 指令级随机 | RV32IM 随机程序 lockstep 比对通过 |
 | Yosys + Nangate45 门级综合 | Yosys 0.52，ABC `-fast`，2-word TCM 时序配置 + 驱动强度提升 |
-| OpenSTA 时序 | **50 MHz pre-CTS MET**：setup +15.94 ns，hold +0.058 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟） |
-| CoreMark 1.0 | **79.86 CoreMark**（**1.60 CoreMark/MHz**，50 MHz） |
-| Dhrystone 2.1 | **41,945 Dhrystones/s**（**23.9 DMIPS**，**0.477 DMIPS/MHz**，50 MHz） |
+| OpenSTA 时序 | **50 MHz pre-CTS MET**：setup +16.01 ns，hold +0.058 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟） |
+| CoreMark 1.0 | **130.12 CoreMark**（**2.60 CoreMark/MHz**，50 MHz） |
+| Dhrystone 2.1 | **65,696 Dhrystones/s**（**37.4 DMIPS**，**0.747 DMIPS/MHz**，50 MHz） |
 
 原始单体 core 保存在 `archive/core_v1.v`。
 
@@ -163,8 +163,10 @@ IRQ = pending & IRQ_EN。要在保持定时器使能的同时清除 pending，�
 
 ## 核心架构（简版）
 
-- IF/ID/EX/MEM/WB，无前递。RAW 相关使 ID 停顿，直到生产者到达 WB；WB->ID 旁路提供该值。
-- 分支/跳转在 EX 解析；更年轻的指令被冲刷。IF 级带寄存器，因此惩罚约 3 个周期。
+- IF/ID/EX/MEM/WB。EX/MEM->ID 前递消除 ALU 相关停顿；只有 load-use 需要停顿
+  （2 周期，数据在 WB 才可用）。x0 硬连线，优先于所有前递。
+- IF 级分支预测：32 项 BTB + 2-bit 饱和计数器。预测正确的 taken 分支/跳转无惩罚；
+  预测错误仍走 EX 重定向与冲刷（约 3 周期）。
 - `mul` 为单周期；`div/divu/rem/remu` 迭代 32 步并冻结流水线。
 - 陷阱在 EX 处理。MEM/WB 中更老的指令正常完成；出错/被中断的指令被取消，并在
   `mret` 后重新执行。
@@ -203,12 +205,13 @@ testbench plusarg、调试流程和预期结果见 `docs/verification.md`；coco
 
 ## 性能
 
-50 MHz、`-O2 -march=rv32im_zicsr`、RV32IM（无 FPU、无 cache），数据位于 DTCM：
+50 MHz、`-O2 -march=rv32im_zicsr`、RV32IM（无 FPU、无 cache），数据位于 DTCM。
+带 EX/MEM->ID 前递和 IF 级分支预测（相比前递前的 79.86 / 41,945 约提升 63% / 57%）：
 
 | Benchmark | 分数 | 归一化 |
 |---|---|---|
-| CoreMark 1.0 | **79.86** | **1.60 CoreMark/MHz** |
-| Dhrystone 2.1 | **41,945 Dhrystones/s** | **23.9 DMIPS**，**0.477 DMIPS/MHz** |
+| CoreMark 1.0 | **130.12** | **2.60 CoreMark/MHz** |
+| Dhrystone 2.1 | **65,696 Dhrystones/s** | **37.4 DMIPS**，**0.747 DMIPS/MHz** |
 
 ```bash
 bash scripts/build_bench.sh coremark     # CoreMark
@@ -218,7 +221,7 @@ make bench                               # 同上
 ```
 
 分数由 core 的 `cycle` CSR 精确计数，不是仿真器 wall-clock。默认运行长度很短
-（Dhrystone 500 轮 ≈ 0.012 秒，CoreMark 1 次迭代 ≈ 0.013 秒），**不满足**
+（Dhrystone 500 轮 ≈ 0.008 秒，CoreMark 1 次迭代 ≈ 0.008 秒），**不满足**
 Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是周期归一化分数，
 不是认证分数。运行次数、官方长度命令和限制见 `docs/benchmarks.md` §4.3。
 
@@ -228,7 +231,7 @@ Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是�
   寄存器阵列，而不是编译好的 SRAM 宏。这样既保留有代表性的 CPU 逻辑和除法器，又避免
   产生数百万个推断 FF。完整签核请使用存储器编译器与 Liberty RAM 模型。
 - `constraints/core.sdc` 目标为 20 ns 时钟（50 MHz）、2 ns I/O 延迟、0.05 pF 负载。
-- 当前 pre-CTS 结果（OpenSTA 3.1.0，理想时钟）：setup +15.94 ns，hold +0.058 ns，
+- 当前 pre-CTS 结果（OpenSTA 3.1.0，理想时钟）：setup +16.01 ns，hold +0.058 ns，
   TNS/WNS 0.00。CTS 后以及换用 SRAM 宏模型后需重新检查 hold。
 - `scripts/setup_opensta.sh` 按 OpenSTA 官方 Ubuntu Dockerfile 的流程，在 `/opt/opensta`
   下从源码构建 CUDD 3.0.0 和 OpenSTA，安装为 `/opt/opensta/bin/sta` 和

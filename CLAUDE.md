@@ -8,7 +8,7 @@ Sprouts500 是一个最简的五级顺序 **RV32IM** MCU IP：
 - `rtl/bus.v`：一个简易的单 outstanding 总线。
 - `rtl/timer.v`、`rtl/gpio.v`、`rtl/uart.v`、`rtl/spi.v`：外设。
 - `rtl/soc_top.v`：SoC 集成。
-- `sim/`：ISA 套件和 SoC demo 的 Icarus testbench。
+- `sim/`：ISA 套件、SoC demo、用户程序、benchmark 和 lockstep 的 Icarus testbench。
 - `sw/isa/`：riscv-arch-test 目标适配层；`sw/demo/`：裸机 demo。
 - `tests/isa/`：官方 RV32I/M 测试源码 + 参考签名。
 - `docs/`：架构、验证、寄存器、工具链、路线图。
@@ -60,7 +60,7 @@ bash scripts/sta.sh              # OpenSTA 报告
 5. 如果改动 `sw/lib/`、`sim/tb_app.v` 或 `scripts/build_app.sh`：运行
    `bash scripts/build_app.sh sw/example`，必须 `TEST_PASS`。
 6. 任何 RTL 改动：运行 `bash scripts/run_cocotb.sh`，必须
-   `cocotb regression PASSED`（当前 soc 72 + core 43 项）。
+   `cocotb regression PASSED`（当前 soc 72 + core 64 项）。
 7. 任何 RTL 改动：运行 `bash scripts/run_riscv_dv.sh`，必须全部种子 lockstep PASS。
 
 如果测试失败，读 `logs/isa/<name>.log`；在 testbench 上使用 `+TRACE`、
@@ -90,7 +90,7 @@ bash scripts/sta.sh              # OpenSTA 报告
 ## 风格与结构
 
 - 使用 Verilog-2001，core 保持单个文件，不使用 SystemVerilog 语法。
-- 除非有实测理由要加前递，否则保持基于停顿的流水线。
+- 流水线已启用 EX/MEM->ID 前递与 IF 级分支预测；新增优化必须有实测收益并保持全部门禁。
 - 与周围风格一致：紧凑的连续赋值，组合译码用 `always @(*)`，状态用
   `always @(posedge clk or negedge rstn)`。
 - 注释应解释非显然控制存在的原因（例如 `bus_conflict`、`IF_ID_hold`），而不是复述
@@ -112,12 +112,12 @@ bash scripts/sta.sh              # OpenSTA 报告
 - 46/46 RV32I/M ISA 测试在 Ubuntu 26.04 通过（GCC 14.2，Icarus 12）。
 - SoC demo 在 Ubuntu 26.04 通过（UART hello、GPIO、定时器中断）。
 - cocotb 套件通过：`cocotb/soc` 72 项（总线 + 外设 + core 程序）、`cocotb/core`
-  43 项（流水线相关/CSR/陷阱/中断/总线/停顿）。
+  64 项（流水线相关/前递/分支预测/CSR/陷阱/中断/总线/停顿）。
 - riscv-dv + Sail 指令级随机 lockstep 通过（默认 3 个种子 + 定向陷阱镜像，4/4）。
-- 性能基线：CoreMark **79.86**（1.60 CoreMark/MHz）；Dhrystone
-  **41,945 Dhrystones/s**（23.9 DMIPS，0.477 DMIPS/MHz）。
+- 性能基线：CoreMark **130.12**（2.60 CoreMark/MHz）；Dhrystone
+  **65,696 Dhrystones/s**（37.4 DMIPS，0.747 DMIPS/MHz）。
 - Yosys + Nangate45 综合在 Yosys 0.52 上运行通过（ABC fast + 驱动强度提升，
-  2-word TCM 时序配置）。OpenSTA 3.1.0 50 MHz pre-CTS 为 **MET**：setup +15.94 ns，
+  2-word TCM 时序配置）。OpenSTA 3.1.0 50 MHz pre-CTS 为 **MET**：setup +16.01 ns，
   hold +0.058 ns，TNS/WNS 0.00（理想时钟；CTS 后需复查 hold）。
 - TCM 是推断阵列；完整签核需要 SRAM 宏 + Liberty RAM 模型。
 - Privilege 套件 / PMP / delegation 尚未实现。

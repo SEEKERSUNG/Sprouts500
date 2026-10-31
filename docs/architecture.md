@@ -44,8 +44,14 @@ ID_PC <= IF_PC_q
 
 因此 `ID_PC` 与 `ID_IR` 始终成对。
 
-`IF_PC` 在前端停顿或流水线冻结时保持。遇到陷阱、`mret` 或 taken 分支/跳转时跳到
+`IF_PC` 在前端停顿或流水线冻结时保持。遇到陷阱、`mret` 或预测错误时跳到
 `redirect_pc`。
+
+分支预测在 IF 级：32 项直接映射 BTB，索引 `IF_PC[6:2]`、tag `IF_PC[31:7]`，
+每项一个 2-bit 饱和方向计数器。命中且计数器 `>=2` 时预测 taken，下一 `IF_PC`
+直接取 BTB 目标；否则顺序 `+4`。预测元数据与 `if_rdata_q`/`IF_PC_q` 同步寄存为
+`IF_pred_taken_q`/`IF_pred_target_q`，经 `IF_ID_pred_*_hold`、`ID_pred_*` 传到
+`EX_pred_*`。EX 用该指令自己的预测（不是新查表）与真实结果比较。
 
 ### 2.2 为什么需要 `IF_ID_*_hold`
 
@@ -73,6 +79,10 @@ IF 指令（`if_rdata_q` / `IF_PC_q`）捕获到 `IF_ID_IR_hold` / `IF_ID_PC_hol
 这带来约 3 个周期的控制流跳转惩罚。不要删除 `id_flush_q`；否则会把过期的顺序执行
 指令译码为目标。
 
+分支预测正确（方向与目标都命中）时，EX 不产生 `redirect`，因此没有冲刷和惩罚；
+预测错误时仍走上面的 `redirect`/`id_flush_q` 序列。陈旧 BTB 项命中非控制指令时，
+EX 以 `EX_PC+4` 纠正。预测只影响取指，错误路径指令永远不会到达 MEM。
+
 ## 3. 译码
 
 `ID_IR` 组合译码为：
@@ -93,13 +103,28 @@ CSR 合法性在 ID 中由 `csr_valid()` / `csr_writable()` 检查：
 - 对只读 CSR（`misa`、`mstatush`、`mip`、vendor/arch ID、计数器）的写为非法
   （例外：`mip` 可写但忽略，以避免软件陷入陷阱）。
 
-## 4. 相关与停顿
+## 4. 相关、前递与停顿
 
-无前递，只有 WB->ID 旁路。
+操作数读多路选择优先级：`x0` 硬连线 > EX 前递 > MEM 前递 > WB 旁路 > 寄存器堆。
+EX 比 MEM 年轻，所以 EX 优先；同一周期有多个同名写者时取最年轻的值。
 
 ```
-id_dep_ex  = ID uses rsN and rsN == EX_rd  and EX_rd_write_req and EX_rd != 0
+ex_fwd_ok  = EX_valid  and EX_rd_write_req and !EX_mem_read
+             and !(ex_is_div and div_state != DIV_DONE)
+mem_fwd_ok = MEM_valid and MEM_rd_write_req and !MEM_mem_read
+```
+
+load 的读数据在 MEM->WB 边沿才寄存（`mem_*_rdata_q`/`bus_rdata_q`），所以 load
+生产者不能从 EX/MEM 前递；除法结果在 `DIV_DONE` 前也是 0，显式排除。其余 ALU、
+LUI/AUIPC、JAL/JALR link、CSR 旧值、mul 都可以从 EX 或 MEM 前递。
+
+只有不可前递的生产者才停顿：
+
+```
+id_dep_ex  = ID uses rsN and rsN == EX_rd and EX_rd_write_req and EX_rd != 0
+             and (EX_mem_read or divider not DONE)
 id_dep_mem = ID uses rsN and rsN == MEM_rd and MEM_rd_write_req and MEM_rd != 0
+             and MEM_mem_read
 raw_stall  = id_dep_ex | id_dep_mem
 ```
 
@@ -109,11 +134,13 @@ raw_stall  = id_dep_ex | id_dep_mem
 - EX 填入气泡，
 - MEM/WB 继续。
 
-因此消费者会等待，直到生产者到达 WB 并可被旁路。Load-use 由同一规则覆盖（load 在 2 个
-停顿周期后到达 WB）。
+结果是：ALU 相关 0 停顿；load-use 仍是 2 个停顿周期（load 在 EX、MEM 各停一拍，
+到 WB 由旁路提供数据）；div 在 `DIV_DONE` 后可直接前递。注意 `raw_stall` 是
+电平信号：消费者在 ID 等待未完成除法时，它在整个 `div_busy` 期间保持高，所以
+统计 load-use 停顿时要减去/排除 `div_busy` 周期。
 
-`x0` 是硬连线的：`id_rs1_data` / `id_rs2_data` 在 WB 旁路*之前*对寄存器 0 返回 0。
-不要把 x0 判断移到旁路之后；否则对 `rd=0` 的写可能泄漏到 x0 的读。
+`x0` 是硬连线的：`id_rs1_data` / `id_rs2_data` 在最外层对寄存器 0 返回 0，
+先于所有前递/旁路。不要把 x0 判断移到后面；否则对 `rd=0` 的写可能泄漏到 x0 的读。
 
 ## 5. 执行
 
@@ -273,19 +300,31 @@ PC <= mepc
    `-march=rv32im_zicsr` 编译。
 10. ISA testbench 的 ITCM 是 4 MiB，因为 `jal-01` 使用了约 1.7 MiB 对齐填充。
     SoC ITCM 是 32 KiB。
+11. 分支预测是纯性能特性：所有纠正都走唯一的 `redirect`/`redirect_pc`
+    （优先级 trap > mret > 预测错误），错误路径指令永远到不了 EX/MEM。
+12. `IF_ID_pred_*_hold` 必须保存寄存后的 `IF_pred_*_q`（与 `if_rdata_q` 配对），
+    不能保存对 `IF_PC` 的实时查表结果（它比 ID 指令超前一条）。
+13. 2-bit BTB 计数器必须饱和；`btb_valid` 和计数器要复位，tag/target 由 valid
+    门控。陈旧项命中非控制指令时由 `EX_PC+4` 纠正。
+14. 只有 load 生产者（以及未 DONE 的除法）会触发 `raw_stall`；x0 判断在所有
+    前递/旁路之前。
 
 ## 10. 复位
 
 - `IF_PC = RESET_PC`（默认 0），`IF_PC_q = RESET_PC`。
 - 所有 valid 位为 0；`id_flush_q=1`。
 - TCM 和寄存器堆不复位（x0 读为 0；其他寄存器由软件初始化）。
+- BTB 的 `btb_valid` 与方向计数器复位为 0；tag/target 不复位，由 valid 保证只在
+  写入后才被使用。预测元数据寄存器复位为 0。
 - CSR 复位为 0；`mepc`/`mtvec` 在陷阱前由软件写入。
 
 ## 11. 性能汇总
 
 - ALU 操作：稳态 1 周期/指令。
-- RAW 相关：2 个停顿周期（生产者 EX -> 消费者 EX）。
-- taken 控制流跳转：含取指冲刷约 3 周期。
+- ALU 相关：0 停顿（EX/MEM->ID 前递）。
+- load-use：2 个停顿周期（load 到 WB 才能旁路）。
+- 预测正确的 taken 分支/跳转：无冲刷惩罚；首次执行/预测错误约 3 周期。
+- JALR 返回地址每次变化时（无 RAS）会持续预测错误。
 - `mul`：1 周期。
-- `div/rem`：约 33 周期，整个流水线冻结。
+- `div/rem`：约 33 周期，整个流水线冻结；结果在 DONE 后可前递。
 - UART/SPI/定时器为内存映射；无 DMA。

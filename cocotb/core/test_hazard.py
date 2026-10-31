@@ -2,15 +2,25 @@
 
 Generates producer/consumer pairs at every pipeline distance:
 
-* load-use (producer in MEM when the consumer is in ID) -> ``raw_stall``,
-* ALU/mul/div producers at EX/MEM/WB distance (WB bypass),
-* x0 writes followed immediately by x0 readers (x0 check precedes the WB
-  bypass in ``id_rs1_data``/``id_rs2_data``).
+* load-use at distance 0/1 (producer in EX/MEM when the consumer is in ID)
+  -> ``raw_stall``; a load at distance >= 2 is read through the WB bypass,
+* ALU/mul/LUI/CSR/JAL-link/div producers at EX/MEM distance -> forwarded by
+  ``ex_fwd_ok``/``mem_fwd_ok`` with no stall (rtl/core.v:806-831), except a
+  divisor still running (``div_busy`` freezes ID),
+* x0 writes followed immediately by x0 readers (x0 check precedes EX/MEM/WB
+  forwarding in ``id_rs1_data``/``id_rs2_data``).
 
 The retirement trace must match the reference interpreter, which would diverge
 immediately if ``IF_ID_IR_hold``/``IF_ID_PC_hold`` lost or duplicated the
 instruction that waits behind a stall.  ``IF_ID_hold`` and ``raw_stall``
-activity is counted to prove the stall path was actually taken.
+activity is counted to prove the load-use stall path was actually taken.
+``raw_stall`` is load-use only: forwarding removed the ALU/mul stalls, and a
+divider is covered by ``div_busy`` (a raw_stall level, like pipe_freeze),
+so ``raw_stall`` must be at least one cycle per load-use pair.
+
+Measured seeds 0/1/2: raw_stall 174/226/341, IF_ID_hold 636/490/836,
+div_busy 594/462/792.  The thresholds below use a static lower bound computed
+from the assembled image, so they do not depend on those numbers.
 """
 
 import pathlib
@@ -32,6 +42,35 @@ from _runner import get_seeds, run_test  # noqa: E402
 
 N_PAIR = 120
 ADDR_REG = 28
+
+
+def count_load_uses(words):
+    """Count producer/consumer pairs the RTL must stall: a load whose next or
+    second-next instruction reads its destination.  Independent of the RTL
+    stall logic (a divergence there shows up as a mismatch, not as silence)."""
+    # Decode just enough: opcode 0x03 = load (rd bits 11:7), ALU-immediate
+    # 0x13 / register 0x33 / load 0x03 read rs1 bits 19:15, store 0x23 and
+    # branch 0x63 read rs1 and rs2 bits 24:20.
+    def rd(w):
+        return (w >> 7) & 0x1F
+
+    def uses(w, r):
+        op = w & 0x7F
+        rs1 = (w >> 15) & 0x1F
+        rs2 = (w >> 20) & 0x1F
+        if op in (0x13, 0x33, 0x03):
+            return rs1 == r != 0
+        if op in (0x23, 0x63):
+            return r != 0 and (rs1 == r or rs2 == r)
+        return False
+
+    n = 0
+    for i, w in enumerate(words):
+        if w & 0x7F == 0x03:
+            r = rd(w)
+            if any(uses(words[i + k], r) for k in (1, 2) if i + k < len(words)):
+                n += 1
+    return n
 
 
 def build_case(seed):
@@ -91,6 +130,8 @@ def test_hazard(seed):
 async def hazard(dut):
     seed = tb_seed()
     words, halt_pc, dtcm_words = build_case(seed)
+    load_uses = count_load_uses(words)
+    expect(load_uses > 0, "sanity: random program contains no load-use pair")
     ref = RV32Interp(words, dtcm_words=dtcm_words).run()
 
     h = CoreHarness(dut)
@@ -100,7 +141,27 @@ async def hazard(dut):
     await h.reset()
     stats = {"raw_stall": 0, "IF_ID_hold": 0, "div_busy": 0,
              "pipe_freeze": 0, "wb_repeat": 0}
-    core_trace = await h.run_with_trace(halt_pc, max_cycles=60_000, stats=stats)
+    unjustified = {"n": 0, "cycle": None}
+    load_stalls = {"n": 0}
+
+    def cycle_hook(hh):
+        # With forwarding, a raw_stall must come from a load producer in EX or
+        # MEM (rd != 0), or from a divider still running (div_busy, which also
+        # makes raw_stall high because ID is frozen).  Anything else would be
+        # a stall the forwarding path failed to remove.  Non-divider stalls
+        # are the load-use stalls exercised by count_load_uses().
+        if not hh.raw_stall or hh.div_busy:
+            return
+        load_ex = hh.EX_valid and hh.EX_mem_read and hh.EX_rd != 0
+        load_mem = hh.MEM_valid and hh.MEM_mem_read and hh.MEM_rd != 0
+        if load_ex or load_mem:
+            load_stalls["n"] += 1
+        else:
+            unjustified["n"] += 1
+            unjustified["cycle"] = (hh.ID_PC, hh.EX_PC, hh.MEM_PC)
+
+    core_trace = await h.run_with_trace(halt_pc, max_cycles=60_000, stats=stats,
+                                       cycle_hook=cycle_hook)
     core_pcs = [pc for pc, _ir in core_trace]
 
     expect(h.itcm(4095) == 0x5A5A_5A5A, "halt mailbox not written")
@@ -108,17 +169,27 @@ async def hazard(dut):
     check_trace(core_pcs, ref.trace, label=f"hazard seed={seed} trace")
     h.compare_dtcm_words(ref.mem.dtcm_words(), label=f"hazard seed={seed} DTCM")
 
-    expect(stats["raw_stall"] > 40,
-           f"only {stats['raw_stall']} raw_stall cycles")
-    expect(stats["IF_ID_hold"] > 40,
-           f"only {stats['IF_ID_hold']} IF_ID_hold cycles")
+    # Re-baselined for EX/MEM->ID forwarding: raw_stall no longer counts
+    # ALU/mul stalls, so the bound comes from the image itself, not from a
+    # magic >40.  Distance-0 pairs stall 2 cycles (EX+div-freeze aside),
+    # distance-1 pairs 1; require at least one per load-use pair.
+    expect(load_stalls["n"] >= load_uses,
+           f"only {load_stalls['n']} load-use stall cycles for {load_uses} "
+           f"load-use pairs; forwarding must not have swallowed load stalls")
+    expect(unjustified["n"] == 0,
+           f"{unjustified['n']} raw_stall cycle(s) with no load in EX/MEM and "
+           f"no div_busy, first at ID/EX/MEM PC 0x{unjustified['cycle']}: a "
+           f"non-load producer stalled ID (forwarding path broken)")
+    expect(stats["IF_ID_hold"] >= stats["raw_stall"],
+           f"IF_ID_hold {stats['IF_ID_hold']} < raw_stall "
+           f"{stats['raw_stall']}: the IF/ID hold path did not follow the stall")
     expect(stats["div_busy"] > 0, "no divider busy cycles")
     expect(stats["pipe_freeze"] > 0, "no pipeline freeze cycles")
     expect(stats["wb_repeat"] > 0,
            "WB never observed held across a freeze (div didn't overlap WB)")
 
-    dut._log.info("hazard seed=%d: raw_stall=%d hold=%d div_busy=%d freeze=%d "
-                  "wb_repeat=%d retired=%d",
-                  seed, stats["raw_stall"], stats["IF_ID_hold"],
-                  stats["div_busy"], stats["pipe_freeze"], stats["wb_repeat"],
-                  len(core_pcs))
+    dut._log.info("hazard seed=%d: raw_stall=%d load_stalls=%d load_uses=%d "
+                  "hold=%d div_busy=%d freeze=%d wb_repeat=%d retired=%d",
+                  seed, stats["raw_stall"], load_stalls["n"], load_uses,
+                  stats["IF_ID_hold"], stats["div_busy"],
+                  stats["pipe_freeze"], stats["wb_repeat"], len(core_pcs))

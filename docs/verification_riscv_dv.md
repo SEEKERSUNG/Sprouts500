@@ -74,6 +74,9 @@ X <pc> <ir> <mcause> <mtval>         EX 级检测到的异常（该指令不退�
 运行在 `test_done` 处结束：RTL 在 `test_done` 指令到达 WB 时停止（之前的指令
 全部已退休，之后的指令不可能先退休），Sail 用 `--stop-at-pc` 在执行它之前停止。
 
+未映射地址检查针对 `EX_PC`（非投机），不是 `IF_PC`：core 有分支预测，IF 可能
+短暂取到错误路径地址，但错误预测在进入 EX 之前就被纠正。
+
 ## 4. 生成程序的改写（postprocess.py）
 
 riscv-dv 面向完整的特权级/Spike 仿真环境，改写后才是 Sprouts500 能执行的镜像：
