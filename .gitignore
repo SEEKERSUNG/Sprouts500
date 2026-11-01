@@ -19,3 +19,6 @@ __pycache__/
 logs/cocotb/
 sim_build/
 results.xml
+
+# Proprietary Nangate45 Liberty: keep locally, never commit
+lib/NangateOpenCellLibrary_typical.lib

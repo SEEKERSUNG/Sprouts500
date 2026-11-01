@@ -41,7 +41,7 @@ bash scripts/setup_cocotb.sh     # 一次性：.venv + cocotb/pytest（需 pytho
 bash scripts/run_cocotb.sh       # cocotb/soc + cocotb/core 回归
 bash scripts/setup_riscv_dv.sh   # 一次性：.venv-dv + Sail
 bash scripts/run_riscv_dv.sh     # riscv-dv + Sail lockstep 回归
-bash scripts/fetch_lib.sh        # 可选：lib/ 已 vendored
+bash scripts/fetch_lib.sh        # 可选：本地下载 Nangate45 Liberty（不提交）
 bash scripts/synth.sh            # Yosys -> build/syn/core_netlist.v
 sudo bash scripts/setup_opensta.sh # 一次性安装 CUDD + OpenSTA 到 /opt/opensta
 bash scripts/sta.sh              # OpenSTA 报告
@@ -164,4 +164,5 @@ bash scripts/sta.sh              # OpenSTA 报告
 - 使用 `python3`，不要用 `python`。
 - `RISCV_PREFIX` 默认 `riscv64-unknown-elf-`（Ubuntu 软件包）。
 - OpenSTA 需要 CUDD；`scripts/setup_opensta.sh` 会把两者安装到 `/opt/opensta`。
-- `lib/NangateOpenCellLibrary_typical.lib` 和 `tests/isa/` 已 vendored，保证离线可复现。
+- `tests/isa/` 已 vendored；`lib/NangateOpenCellLibrary_typical.lib` 仅本地使用，
+  已在 `.gitignore` 中，不能重新提交。

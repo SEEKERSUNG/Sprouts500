@@ -47,5 +47,6 @@ bash scripts/sta.sh             # 期望 100 MHz 下 setup/hold MET
   LR/SC 重叠逻辑、MMIO 原子陷阱、`mepc` 只清 bit 0；FPU 的 start/busy/done
   握手、FP 寄存器 scoreboard、FS/fflags 规则。原因见 `CLAUDE.md`。
 - `tests/isa/env/arch_test.h` 包含本地 `la x0` 兼容补丁；保留它。
-- `tests/isa/` 与 `lib/` 已 vendored；`build/`、`logs/` 被忽略。
+- `tests/isa/` 已 vendored；`lib/` 中的 Nangate45 Liberty 仅本地使用（已 gitignore）；
+  `build/`、`logs/` 被忽略。
 - OpenSTA/CUDD 系统安装在 `/opt/opensta`，命令为 `/usr/local/bin/sta`。

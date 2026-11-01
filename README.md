@@ -49,7 +49,7 @@ bash scripts/setup_riscv_dv.sh     # 一次性：.venv-dv + Sail 0.16
 bash scripts/run_riscv_dv.sh       # riscv-dv + Sail lockstep
 
 # 7. 综合 + 时序
-bash scripts/fetch_lib.sh          # Nangate45 Liberty（lib/ 中已附带）
+bash scripts/fetch_lib.sh          # Nangate45 Liberty（仅本地，不随仓库分发）
 bash scripts/synth.sh              # 生成 build/syn/core_netlist.v
 sudo bash scripts/setup_opensta.sh # 一次性安装 CUDD + OpenSTA 到 /opt/opensta
 bash scripts/sta.sh                # 100 MHz STA 报告
@@ -98,7 +98,7 @@ cocotb/          cocotb 验证：soc/（总线+外设）、core/（微架构）�
 verif/riscv_dv/  riscv-dv 生成器（vendored）与 lockstep 比对脚本
 scripts/         安装/抓取/构建/运行/综合/STA 脚本
 tests/isa/       官方 ISA 测试源码 + 参考签名
-lib/             Nangate45 Liberty
+lib/             本地 Nangate45 Liberty（不提交）
 constraints/     SDC
 docs/            架构、验证、寄存器、工具链、路线图、benchmark
 archive/         原始 core
@@ -271,7 +271,9 @@ Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是�
 ## 仓库说明
 
 - `build/`、`logs/` 已被忽略。OpenSTA/CUDD 安装在系统目录 `/opt/opensta`，不在仓库内。
-- `tests/isa/` 与 `lib/` 已 vendored，保证离线可复现验证。
+- `tests/isa/` 已 vendored，保证离线可复现验证。
+- `lib/NangateOpenCellLibrary_typical.lib` 仅供本地综合/STA，不随仓库分发（已加入
+  `.gitignore`）；可用 `bash scripts/fetch_lib.sh` 自行下载或放置本地副本。
 - 项目目标环境为 Ubuntu 24.04/26.04，使用 `gcc-riscv64-unknown-elf`、
   Icarus Verilog 12+、Yosys 和 OpenSTA。已验证环境为 Ubuntu 26.04。
 
@@ -296,7 +298,7 @@ Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是�
 | RISC-V ISA Manual | RV32F/A/C、CSR、陷阱与浮点语义 | CC BY 4.0 | <https://github.com/riscv/riscv-isa-manual> |
 | CoreMark (EEMBC) | 性能测试源码 | Apache-2.0，另受 EEMBC COREMARK Acceptable Use/Trademark 条款约束 | <https://github.com/eembc/coremark> |
 | Dhrystone（riscv-tests 版本） | 性能测试源码 | BSD-3-Clause（Regents of the University of California） | <https://github.com/riscv-software-src/riscv-tests/tree/master/benchmarks/dhrystone> |
-| Nangate45 Open Cell Library | Yosys/OpenSTA 使用的标准单元 Liberty | 文件头声明为 Nangate Inc. 专有材料，不属于项目自有代码的许可证范围；公开再分发前请确认或替换 | `lib/NangateOpenCellLibrary_typical.lib`（见文件头） |
+| Nangate45 Open Cell Library | Yosys/OpenSTA 使用的标准单元 Liberty | 文件头声明为 Nangate Inc. 专有材料；**不随仓库分发**，仅本地自备 | `bash scripts/fetch_lib.sh`（见文件头） |
 | Yosys / OpenSTA / Icarus Verilog / cocotb / RISC-V GNU toolchain | 综合、时序、仿真、验证和编译工具 | 各自上游许可证（ISC / GPL-3.0 / GPL-2.0 / BSD-3-Clause / GPL + runtime exception） | 各项目主页 |
 
 设计方法上还参考了处理器/RTL 工程类 agent skill 的检查清单（未包含其代码）：
