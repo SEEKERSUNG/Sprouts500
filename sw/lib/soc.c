@@ -5,7 +5,7 @@
 
 void uart_init(void)
 {
-    UART_BAUD = UART_BAUD_50MHZ_115200;
+    UART_BAUD = UART_BAUD_100MHZ_115200;
     UART_CTRL = UART_CTRL_TX_EN;
 }
 

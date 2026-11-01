@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import random
 
+import rvc_ref
+
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
@@ -124,6 +126,158 @@ def enc_j(opcode, rd, imm):
            ((rd & 0x1F) << 7) | (opcode & 0x7F)
 
 
+def enc_amo(funct5, rd, rs1, rs2, aq=0, rl=0, funct3=2):
+    """AMO*.W / LR.W / SC.W: funct5 | aq | rl | rs2 | rs1 | 010 | rd | 0101111.
+
+    AMOs have no immediate field: the effective address is rs1 + 0.
+    """
+    return ((funct5 & 0x1F) << 27) | ((aq & 1) << 26) | ((rl & 1) << 25) | \
+           ((rs2 & 0x1F) << 20) | ((rs1 & 0x1F) << 15) | ((funct3 & 7) << 12) | \
+           ((rd & 0x1F) << 7) | 0x2F
+
+
+def _fld(v, hi, lo):
+    return (v >> lo) & ((1 << (hi - lo + 1)) - 1)
+
+
+def _pack(*pairs):
+    """pairs: (value, hi, lo) fields packed into a 16-bit encoding."""
+    out = 0
+    for item in pairs:
+        v, hi, lo = item
+        out |= (int(v) & ((1 << (hi - lo + 1)) - 1)) << lo
+    return out & 0xFFFF
+
+
+# -- RVC encoders (16-bit) ------------------------------------------------
+def ce_addi(rd, imm):
+    return _pack((0, 15, 13), ((imm >> 5) & 1, 12, 12), (rd, 11, 7),
+                 (imm & 31, 6, 2), (1, 1, 0))
+
+
+def ce_li(rd, imm):
+    """C.LI (funct3=010), not C.ADDI (funct3=000): different expansion for rs1."""
+    return _pack((2, 15, 13), ((imm >> 5) & 1, 12, 12), (rd, 11, 7),
+                 (imm & 31, 6, 2), (1, 1, 0))
+
+
+def ce_lui(rd, imm6):
+    return _pack((3, 15, 13), ((imm6 >> 5) & 1, 12, 12), (rd, 11, 7),
+                 (imm6 & 31, 6, 2), (1, 1, 0))
+
+
+def ce_addi16sp(imm):
+    off = imm & 0x3FF
+    return _pack((3, 15, 13), (_fld(off, 9, 9), 12, 12), (2, 11, 7),
+                 (_fld(off, 4, 4), 6, 6), (_fld(off, 6, 6), 5, 5),
+                 (_fld(off, 8, 7), 4, 3), (_fld(off, 5, 5), 2, 2), (1, 1, 0))
+
+
+def ce_addi4spn(rdp, imm):
+    return _pack((0, 15, 13), (_fld(imm, 9, 6), 10, 7),
+                 (_fld(imm, 5, 4), 12, 11), (_fld(imm, 2, 2), 6, 6),
+                 (_fld(imm, 3, 3), 5, 5), (rdp - 8, 4, 2), (0, 1, 0))
+
+
+def ce_lw(rdp, rs1p, uimm):
+    return _pack((2, 15, 13), (_fld(uimm, 5, 3), 12, 10), (rs1p - 8, 9, 7),
+                 (_fld(uimm, 6, 6), 5, 5), (_fld(uimm, 2, 2), 6, 6),
+                 (rdp - 8, 4, 2), (0, 1, 0))
+
+
+def ce_sw(rs2p, rs1p, uimm):
+    return _pack((6, 15, 13), (_fld(uimm, 5, 3), 12, 10), (rs1p - 8, 9, 7),
+                 (_fld(uimm, 6, 6), 5, 5), (_fld(uimm, 2, 2), 6, 6),
+                 (rs2p - 8, 4, 2), (0, 1, 0))
+
+
+def ce_lwsp(rd, uimm):
+    return _pack((2, 15, 13), (_fld(uimm, 5, 5), 12, 12), (rd, 11, 7),
+                 (_fld(uimm, 4, 2), 6, 4), (_fld(uimm, 7, 6), 3, 2), (2, 1, 0))
+
+
+def ce_swsp(rs2, uimm):
+    return _pack((6, 15, 13), (_fld(uimm, 5, 2), 12, 9),
+                 (_fld(uimm, 7, 6), 8, 7), (rs2, 6, 2), (2, 1, 0))
+
+
+def ce_slli(rd, shamt):
+    return _pack((0, 15, 13), ((shamt >> 5) & 1, 12, 12), (rd, 11, 7),
+                 (shamt & 31, 6, 2), (2, 1, 0))
+
+
+def ce_srli(rdp, shamt):
+    return _pack((4, 15, 13), (0, 11, 10), (rdp - 8, 9, 7),
+                 (shamt & 31, 6, 2), (1, 1, 0))
+
+
+def ce_srai(rdp, shamt):
+    return _pack((4, 15, 13), (1, 11, 10), (rdp - 8, 9, 7),
+                 (shamt & 31, 6, 2), (1, 1, 0))
+
+
+def ce_andi(rdp, imm):
+    return _pack((4, 15, 13), (2, 11, 10), ((imm >> 5) & 1, 12, 12),
+                 (rdp - 8, 9, 7), (imm & 31, 6, 2), (1, 1, 0))
+
+
+def ce_regop(rdp, rs2p, op):
+    f3 = {0: (0, 0x20), 1: (4, 0), 2: (6, 0), 3: (7, 0)}[op]
+    return _pack((4, 15, 13), (3, 11, 10), (rdp - 8, 9, 7),
+                 ((op, 6, 5)), (rs2p - 8, 4, 2), (1, 1, 0))
+
+
+def ce_sub(rdp, rs2p): return ce_regop(rdp, rs2p, 0)
+def ce_xor(rdp, rs2p): return ce_regop(rdp, rs2p, 1)
+def ce_or(rdp, rs2p):  return ce_regop(rdp, rs2p, 2)
+def ce_and(rdp, rs2p): return ce_regop(rdp, rs2p, 3)
+
+
+def ce_j(off):
+    off &= 0xFFF
+    return _pack((5, 15, 13), (_fld(off, 11, 11), 12, 12),
+                 (_fld(off, 4, 4), 11, 11), (_fld(off, 9, 8), 10, 9),
+                 (_fld(off, 10, 10), 8, 8), (_fld(off, 6, 6), 7, 7),
+                 (_fld(off, 7, 7), 6, 6), (_fld(off, 3, 1), 5, 3),
+                 (_fld(off, 5, 5), 2, 2), (1, 1, 0))
+
+
+def ce_jal(off):
+    return (ce_j(off) & ~(7 << 13)) | (1 << 13)
+
+
+def ce_branch(rs1p, off, beqz):
+    off &= 0x1FF
+    return _pack((6 if beqz else 7, 15, 13), (_fld(off, 8, 8), 12, 12),
+                 (_fld(off, 4, 3), 11, 10), (rs1p - 8, 9, 7),
+                 (_fld(off, 7, 6), 6, 5), (_fld(off, 2, 1), 4, 3),
+                 (_fld(off, 5, 5), 2, 2), (1, 1, 0))
+
+
+def ce_beqz(rs1p, off): return ce_branch(rs1p, off, True)
+def ce_bnez(rs1p, off): return ce_branch(rs1p, off, False)
+
+
+def ce_mv(rd, rs2):
+    return _pack((4, 15, 13), (0, 12, 12), (rd, 11, 7), (rs2, 6, 2), (2, 1, 0))
+
+
+def ce_add(rd, rs2):
+    return _pack((4, 15, 13), (1, 12, 12), (rd, 11, 7), (rs2, 6, 2), (2, 1, 0))
+
+
+def ce_jr(rs1):
+    return _pack((4, 15, 13), (0, 12, 12), (rs1, 11, 7), (2, 1, 0))
+
+
+def ce_jalr(rs1):
+    return _pack((4, 15, 13), (1, 12, 12), (rs1, 11, 7), (2, 1, 0))
+
+
+CE_NOP = 0x0001
+CE_EBREAK = 0x9002
+
+
 class _Fixup:
     __slots__ = ("kind", "label", "pc", "funct3", "rs1", "rs2", "rd", "auipc_pc")
 
@@ -138,6 +292,15 @@ class _Fixup:
         self.auipc_pc = kw.get("auipc_pc", 0)
 
 
+class _Half:
+    """A 16-bit RVC encoding inside Asm.items (a bare int would be ambiguous
+    with small 32-bit instruction words such as the NOP 0x00000013)."""
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value & 0xFFFF
+
+
 class Asm:
     """Tiny assembler supporting labels, forward branch/jump fixups and ``la``."""
 
@@ -148,15 +311,21 @@ class Asm:
         self.halt_loop_pc = None
 
     # -- layout ------------------------------------------------------------
+    # Items are 32-bit words (ints), fixups, or 16-bit RVC halfwords (_Half).
+    # RVC tests pack mixed widths; everything else uses whole words.
+    def _emit_half(self, half: int):
+        self.items.append(_Half(half))
+
     def here(self) -> int:
-        return len(self.items) * 4
+        return sum(2 if isinstance(item, _Half) else 4
+                   for item in self.items)
 
     def org(self, pc: int):
         """Start assembling at ``pc`` (used for straight-line blocks that are
         built separately and then copied into a larger image)."""
         expect(pc % 4 == 0 and pc >= 0, f"bad org {pc}")
-        expect(pc // 4 >= len(self.items), "org moves backwards")
-        while len(self.items) * 4 < pc:
+        expect(pc >= self.here(), "org moves backwards")
+        while self.here() < pc:
             self.emit(0)
 
     def label(self, name: str):
@@ -164,6 +333,11 @@ class Asm:
         self.labels[name] = self.here()
 
     def emit(self, word: int):
+        # A 32-bit instruction always starts word aligned.  Pad a dangling
+        # lane with C.NOP (0x0001), which is legal if the previous compressed
+        # instruction falls through into it.
+        while self.here() % 4:
+            self.items.append(_Half(0x0001))
         self.items.append(word & MASK32)
 
     # -- generic encoders --------------------------------------------------
@@ -214,6 +388,35 @@ class Asm:
     # -- upper immediates --------------------------------------------------
     def lui(self, rd, imm20):  self.emit(enc_u(0x37, rd, imm20))
     def auipc(self, rd, imm20): self.emit(enc_u(0x17, rd, imm20))
+
+    # -- RVC ---------------------------------------------------------------
+    def cword(self, words):
+        """Emit 16-bit compressed encodings back to back."""
+        for w in words:
+            expect(0 <= w < 0x10000 and (w & 3) != 3,
+                   f"not a compressed encoding: {w:#x}")
+            self._emit_half(w)
+
+    def raw16(self, half):
+        """Emit any 16-bit halfword (including the low half of a 32-bit op)."""
+        expect(0 <= half < 0x10000, f"bad halfword {half:#x}")
+        self._emit_half(half)
+
+    def raw32_unaligned(self, word):
+        """Emit a 32-bit word at the current (possibly 2-mod-4) address, for
+        intentional straddle tests.  No alignment fill is inserted."""
+        self.items.append(word & MASK32)
+
+    def jal_unaligned(self, rd, label):
+        """32-bit JAL fixup placed at the current (possibly odd) address."""
+        self.items.append(_Fixup("j", label, self.here(), rd=rd))
+
+    def align(self):
+        """Pad one lane with C.NOP so a following 32-bit instruction is word
+        aligned.  Only needed on paths where the preceding compressed
+        instruction can fall through."""
+        if self.here() % 4:
+            self._emit_half(0x0001)
 
     def li(self, rd, value: int):
         value &= MASK32
@@ -298,11 +501,17 @@ class Asm:
 
     # -- resolution --------------------------------------------------------
     def assemble(self) -> list[int]:
+        return pack_words(self._resolve())
+
+    def _resolve(self) -> list:
         out = []
+        # A 32-bit plain word may coincide with a small numeric label name
+        # ("276"), so only fixup objects are resolved against the label map.
         for idx, item in enumerate(self.items):
-            if isinstance(item, int):
+            if isinstance(item, (_Half, int)):
                 out.append(item)
                 continue
+            expect(not isinstance(item, int), "int item")
             expect(item.label in self.labels, f"undefined label {item.label}")
             target = self.labels[item.label]
             if item.kind == "b":
@@ -329,6 +538,23 @@ class Asm:
             else:  # pragma: no cover
                 raise AssertionError(f"unknown fixup {item.kind}")
         return out
+
+
+def pack_words(halfwords_and_words):
+    """Pack a mixed list of _Half and 32-bit words into ITCM words in address
+    order (little-endian lanes)."""
+    data = bytearray()
+    for item in halfwords_and_words:
+        if isinstance(item, _Half):
+            data += item.value.to_bytes(2, "little")
+        else:
+            data += int(item).to_bytes(4, "little")
+    if len(data) % 4:
+        # A trailing low halfword leaves its lane 0 unassigned.  Fill it with
+        # 0x0013 (the high half of a NOP) so that executing it is a NOP; a
+        # zero word would be an illegal instruction there.
+        data += b"\x37\x00" if len(data) % 4 == 2 else b"\x37"
+    return [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +656,7 @@ class RV32Interp:
                 self.regs[i] = u32(v)
         self.pc = 0
         self.trace = []
+        self.lr_resv = None       # RV32A reservation (word address)
 
     def _write_rd(self, rd, value):
         if rd != 0:
@@ -437,7 +664,18 @@ class RV32Interp:
 
     def step(self):
         pc = self.pc
-        ir = self.mem.load(pc, 4, signed=False)
+        raw = self.mem.load(pc, 2, signed=False) & 0xFFFF
+        if (raw & 3) != 3:
+            # IALIGN=16: expand RVC to canonical 32-bit IR (mirror of IF)
+            expanded = rvc_ref.rvc_expand(raw)
+            if expanded == (0x10000 | raw):
+                raise AssertionError(
+                    f"illegal compressed 0x{raw:04x} at 0x{pc:08x}")
+            ir = expanded & MASK32
+            length = 2
+        else:
+            ir = self.mem.load(pc, 4, signed=False)
+            length = 4
         self.trace.append(pc)
         opcode = ir & 0x7F
         rd = (ir >> 7) & 0x1F
@@ -447,7 +685,7 @@ class RV32Interp:
         funct7 = (ir >> 25) & 0x7F
         a = self.regs[rs1]
         b = self.regs[rs2]
-        next_pc = u32(pc + 4)
+        next_pc = u32(pc + length)
         halted_store = False
 
         if opcode == 0x37:      # LUI
@@ -457,12 +695,12 @@ class RV32Interp:
         elif opcode == 0x6F:    # JAL
             imm = sext(((ir >> 31) << 20) | (((ir >> 12) & 0xFF) << 12) |
                        (((ir >> 20) & 1) << 11) | (((ir >> 21) & 0x3FF) << 1), 21)
-            self._write_rd(rd, pc + 4)
+            self._write_rd(rd, pc + length)
             next_pc = u32(pc + imm)
         elif opcode == 0x67:    # JALR
             imm = sext(ir >> 20, 12)
             target = u32(a + imm) & ~1
-            self._write_rd(rd, pc + 4)
+            self._write_rd(rd, pc + length)
             next_pc = target
         elif opcode == 0x63:    # BRANCH
             imm = sext(((ir >> 31) << 12) | (((ir >> 7) & 1) << 11) |
@@ -510,6 +748,8 @@ class RV32Interp:
                 self.mem.store(addr, 4, b)
             else:
                 raise AssertionError(f"bad store funct3 {funct3}")
+            if self.lr_resv is not None and u32(addr) & ~3 == self.lr_resv:
+                self.lr_resv = None
             if addr == HALT_ADDR and b == HALT_MAGIC:
                 halted_store = True
         elif opcode == 0x13:    # OP-IMM
@@ -589,6 +829,47 @@ class RV32Interp:
                     value = a & b
                 else:
                     raise AssertionError(f"bad OP funct3 {funct3}")
+            self._write_rd(rd, value)
+        elif opcode == 0x2F:    # AMO (RV32A, .W)
+            if funct3 != 2:
+                raise AssertionError(f"bad AMO funct3 {funct3}")
+            funct5 = (ir >> 27) & 0x1F
+            addr = u32(a)
+            if addr % 4:
+                raise AssertionError(
+                    "misaligned AMO (the RTL traps); directed trap tests use "
+                    "hand-built expectations instead")
+            old = self.mem.load(addr, 4, signed=False)
+            if funct5 == 0b00010:           # LR.W
+                if rs2 != 0:
+                    raise AssertionError("LR.W with rs2 != 0 (the RTL traps)")
+                value = old
+                self.lr_resv = addr
+            elif funct5 == 0b00011:         # SC.W
+                ok = self.lr_resv == addr
+                if ok:
+                    self.mem.store(addr, 4, b)
+                    self.lr_resv = None
+                    if addr == HALT_ADDR and b == HALT_MAGIC:
+                        halted_store = True
+                value = 0 if ok else 1
+            else:
+                new = {
+                    0b00000: (old + b) & MASK32,
+                    0b00001: b,
+                    0b00100: old ^ b,
+                    0b01000: old | b,
+                    0b01100: old & b,
+                    0b10000: old if s32(old) < s32(b) else b,
+                    0b10100: old if s32(old) > s32(b) else b,
+                    0b11000: old if old < b else b,
+                    0b11100: old if old > b else b,
+                }.get(funct5)
+                if new is None:
+                    raise AssertionError(f"unsupported AMO funct5 {funct5:#07b}")
+                self.mem.store(addr, 4, new)
+                self.lr_resv = None if self.lr_resv == addr else self.lr_resv
+                value = old
             self._write_rd(rd, value)
         elif opcode == 0x0F:    # MISC-MEM (fence / fence.i / wfi)
             pass
@@ -769,17 +1050,18 @@ class CoreHarness:
     # Read-only taps into the BTB and the IF/ID/EX prediction plumbing.
     # ``btb_*``, ``EX_pred_*`` and ``ex_pred_mispredict``/``btb_we``/``redirect``
     # are combinational; ``IF_pred_*_q`` are registered with ``if_rdata_q``.
-    # BTB geometry mirrors the RTL localparam BTB_IBITS=5 (32 entries).
-    BTB_IBITS = 5
+    # BTB geometry mirrors the RTL localparam BTB_IBITS=6 (64 entries,
+    # index PC[6:1], tag PC[31:7] because IALIGN=16).
+    BTB_IBITS = 6
     BTB_NUM = 1 << BTB_IBITS
 
     @staticmethod
     def btb_index(pc):
-        return (pc >> 2) & ((1 << CoreHarness.BTB_IBITS) - 1)
+        return (pc >> 1) & ((1 << CoreHarness.BTB_IBITS) - 1)
 
     @staticmethod
     def btb_tag_of(pc):
-        return (pc & MASK32) >> (CoreHarness.BTB_IBITS + 2)
+        return (pc & MASK32) >> (CoreHarness.BTB_IBITS + 1)
 
     def btb_entry(self, idx):
         """(valid, tag, target, cnt) of BTB entry ``idx``; entries are raw."""
@@ -808,6 +1090,22 @@ class CoreHarness:
 
     @property
     def btb_pred_target(self): return self.sig("btb_pred_target")
+
+    # RVC front-end and RV32A taps.
+    def if_straddle_pending(self):
+        # The two-word IF window means there is no straddle-assembly state;
+        # kept as a 0-valued tap for older tests/diagnostics.
+        return 0
+    def if_insn_pc(self): return self.sig("if_insn_pc")
+    def if_insn_ir(self): return self.sig("if_insn_ir")
+    def if_insn_compressed(self): return self.sig("if_insn_compressed")
+    def id_is_compressed(self): return self.sig("ID_is_compressed")
+    def ex_is_compressed(self): return self.sig("EX_is_compressed")
+    def mem_amo_active(self): return self.sig("mem_amo_active")
+    def mem_amo_we(self): return self.sig("mem_amo_we")
+    def lr_resv_valid(self): return self.sig("lr_resv_valid")
+    def lr_resv_addr(self): return self.sig("lr_resv_addr")
+    def mem_amo_phase(self): return self.sig("MEM_amo_phase")
 
     @property
     def IF_pred_taken_q(self): return self.sig("IF_pred_taken_q")

@@ -23,6 +23,29 @@
 未映射的总线读返回 0；未映射写被忽略。所有外设寄存器为 32 位、按 word 寻址。
 `wstrb` 选择写的字节 lane。
 
+## 1.1 原子指令的地址范围
+
+RV32A（LR.W/SC.W/AMO*.W）只在 tag `0x0`（ITCM）和 `0x1`（DTCM）上实现。单 hart、
+无 DMA，TCM 只由 MEM 写，因此 TCM 的读改写在核内是真正原子的。总线/MMIO 地址上的
+原子指令在 EX 直接产生访问错误（LR cause 5，AMO/SC cause 7），不会产生总线事务；
+简单总线没有原子事务，且 MMIO 读可能有副作用。`misa` 为 `0x4000_1125`（I/M/A/C/F）。
+
+
+## 1.2 浮点 CSR（RV32F）
+
+| 地址 | 名称 | 访问 | 复位 | 说明 |
+|---|---|---|---|---|
+| 0x001 | fflags | RW | 0 | [4] NV，[3] DZ，[2] OF，[1] UF，[0] NX |
+| 0x002 | frm | RW | 0 | 舍入模式：0 RNE，1 RTZ，2 RDN，3 RUP，4 RMM |
+| 0x003 | fcsr | RW | 0 | [7:5] frm，[4:0] fflags |
+
+- `mstatus.FS[14:13]` 复位为 00（Off）。FS=Off 时任何浮点指令或这三个 CSR 的访问
+  都是非法指令；执行浮点指令或写 fcsr/frm/fflags 把 FS 置为 11（Dirty）。
+- 写 `frm`/`fcsr` 时若 `frm` 为 5/6/7，指令非法；OP-FP 的 rm 字段 101/110 也非法，
+  111 表示 DYN（使用 `frm`）。
+- `fflags` 在浮点指令退休时按该指令的异常累积（OR），软件通过写 0 清除。
+- 浮点寄存器 `f0..f31` 是普通 32 位寄存器，`f0` 不是硬连线的零。
+
 ## 2. 总线协议
 
 Core 侧：
@@ -62,7 +85,7 @@ bus_rdata_i, bus_ready_i
 典型配置：
 
 ```c
-TIMER_CMP  = 5000;
+TIMER_CMP  = 10000;
 TIMER_CTRL = 0x0f;      // EN|IE|W1C|PERIODIC
 ```
 
@@ -88,12 +111,12 @@ TIMER_CTRL = 0x0f;      // EN|IE|W1C|PERIODIC
 |---|---|---|---|---|
 | 0x00 | CTRL | RW | 0 | [0] TX_EN，[1] RX_EN，[2] TX_IRQ，[3] RX_IRQ |
 | 0x04 | STATUS | RO | 0 | [0] TX_BUSY，[1] RX_VALID，[2] TX_DONE，[3] RX_OVERRUN |
-| 0x08 | BAUD | RW | 433 | 每比特时钟数 - 1 |
+| 0x08 | BAUD | RW | 867 | 每比特时钟数 - 1 |
 | 0x0C | TXDATA | WO | - | 写入待发送字节 |
 | 0x10 | RXDATA | RO | 0 | 接收字节；读取清除 RX_VALID/OVERRUN |
 
 - 8N1，LSB first，空闲为高。
-- `BAUD = clk_freq / baud - 1`；复位值 433 对应 50 MHz 下的 115200。
+- `BAUD = clk_freq / baud - 1`；复位值 867 对应 100 MHz 下的 115200。
 - TX：在 `TX_EN=1` 且 `TX_BUSY=0` 时写 TXDATA 会启动一帧。`TX_DONE` 在停止位结束
   时置位，并保持到下一次写 TXDATA 或关闭 TX。
 - RX：下降沿启动一帧；起始位在半比特处采样，随后数据位和停止位按完整比特间隔采样。
@@ -106,7 +129,7 @@ TIMER_CTRL = 0x0f;      // EN|IE|W1C|PERIODIC
 典型配置：
 
 ```c
-UART_BAUD = 433;
+UART_BAUD = 867;
 UART_CTRL = 0x1;        // 使能 TX
 while (UART_STATUS & 1) ;
 UART_TXDATA = 'H';
@@ -118,7 +141,7 @@ UART_TXDATA = 'H';
 |---|---|---|---|---|
 | 0x00 | CTRL | RW | 0 | [0] EN，[1] CPOL，[2] CPHA，[3] IRQ，[4] LSB_FIRST |
 | 0x04 | STATUS | RO | 0 | [0] BUSY，[1] DONE |
-| 0x08 | CLKDIV | RW | 24 | SCLK 半周期（时钟数）- 1 |
+| 0x08 | CLKDIV | RW | 49 | SCLK 半周期（时钟数）- 1 |
 | 0x0C | TXDATA | WO | - | 写入字节以启动传输 |
 | 0x10 | RXDATA | RO | 0 | 接收字节；读取清除 DONE |
 | 0x14 | CS | RW | 0 | bit n = 1 拉低 `cs_n[n]` |
@@ -135,7 +158,7 @@ UART_TXDATA = 'H';
 典型的模式 0 回环：
 
 ```c
-SPI_CLKDIV = 24;
+SPI_CLKDIV = 49;
 SPI_CTRL   = 0x1;       // 使能，模式 0，MSB first
 SPI_CS     = 0x1;       // 拉低 cs_n[0]
 SPI_TXDATA = 0xa5;
@@ -165,7 +188,7 @@ soft_irq   -> 0
 | 定时器 CMP | `0xffff_ffff` |
 | GPIO DIR/OUT/IRQ_EN/PEND | 0 |
 | UART CTRL/STATUS | 0 |
-| UART BAUD | 433 |
+| UART BAUD | 867 |
 | SPI CTRL/STATUS/CS | 0 |
-| SPI CLKDIV | 24 |
+| SPI CLKDIV | 49 |
 | CSR | 0 |

@@ -13,10 +13,10 @@ fi
 
 # The TCM arrays are shrunk to 2 words for gate-level CPU timing.  They are
 # inferred register arrays, not compiled SRAM macros; a real memory compiler +
-# Liberty RAM models are required for full TCM signoff.  The CPU logic, divider,
-# bus, CSR and control paths are unchanged.
+# Liberty RAM models are required for full TCM signoff.  The CPU logic, FPU,
+# divider, bus, CSR and control paths are unchanged.
 yosys -p "
-    read_verilog $ROOT/rtl/core.v;
+    read_verilog $ROOT/rtl/fp_unit.v $ROOT/rtl/core.v;
     chparam -set ITCM_WORDS 2 -set DTCM_WORDS 2 core;
     synth -top core -flatten;
     dfflibmap -liberty $LIB;
@@ -28,5 +28,6 @@ yosys -p "
 
 # Yosys/ABC does not resize high-fanout nets.  Promote drivers of flat register
 # file muxes / pipeline enables / inferred memory enables to stronger cells.
-# This is a first-order pre-CTS fix; a real resizer + CTS should replace it.
-"$PYTHON" "$ROOT/scripts/upsize_fanout.py" "$ROOT/build/syn/core_netlist.v" 40
+# The threshold is tuned for the staged FPU + core at 100 MHz; this is a
+# first-order pre-CTS fix, a real resizer + CTS should replace it.
+"$PYTHON" "$ROOT/scripts/upsize_fanout.py" "$ROOT/build/syn/core_netlist.v" 10

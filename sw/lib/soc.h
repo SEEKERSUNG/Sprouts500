@@ -59,7 +59,8 @@
 #define UART_STATUS_TX_DONE 0x4u
 #define UART_STATUS_RX_OVERRUN 0x8u
 
-#define UART_BAUD_50MHZ_115200 433u
+/* BAUD = f_clk / baud - 1.  The SoC runs at 100 MHz. */
+#define UART_BAUD_100MHZ_115200 867u
 
 // spi
 #define SPI_CTRL   SOC_IO32(SOC_SPI_BASE + 0x00)

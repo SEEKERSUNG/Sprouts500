@@ -54,7 +54,7 @@ module tb_core;
     integer cycles;
     integer errors;
     integer i;
-    reg [31:0] ref_mem [0:8191];
+    reg [31:0] ref_mem [0:131071];
     reg done;
     reg halt_seen;
     reg halt_store_seen;

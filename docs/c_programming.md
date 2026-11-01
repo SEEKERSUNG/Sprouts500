@@ -64,11 +64,12 @@ run.log   本次运行的完整输出
 
 ### 1.2 启动与结束
 
-`sw/lib/crt0.S` 做三件事：
+`sw/lib/crt0.S` 做四件事：
 
 1. `sp = _stack_top`；
-2. 清零 `_sbss .. _ebss`；
-3. `call main`，把 `main` 的返回值交给 `soc_halt()`。
+2. 写 `mstatus.FS = Initial`（0x2000），使 C 代码生成的 RV32F 指令可以执行；
+3. 清零 `_sbss .. _ebss`；
+4. `call main`，把 `main` 的返回值交给 `soc_halt()`。
 
 所以：
 
@@ -120,7 +121,7 @@ void trap_handler(unsigned cause, unsigned epc, unsigned tval)
 
 ```c
 soc_csrw_mtvec((unsigned)trap_entry);
-TIMER_CMP  = 5000;
+TIMER_CMP  = 10000;
 TIMER_CTRL = 0x0F;
 soc_csr_set_mie(MIE_MTIE);
 soc_csr_set_mstatus(MSTATUS_MIE);
@@ -164,11 +165,12 @@ Sprouts500 example app
 dtcm ok
 timer ok
 gpio ok
+fp ok
 irq ok
 example PASS
 
 APP_RESULT=0 (0x00000000) expected=0
-APP_CYCLES=311549 UART_RX_BYTES=68
+APP_CYCLES=665558 UART_RX_BYTES=74
 TEST_PASS
 ```
 
@@ -180,7 +182,7 @@ TEST_PASS
 
 ```bash
 "${RISCV_PREFIX}gcc" \
-    -march=rv32im_zicsr -mabi=ilp32 \
+    -march=rv32imacf_zicsr -mabi=ilp32 \
     -mcmodel=medany -msmall-data-limit=0 \
     -O2 -g -Wall -Wextra -ffreestanding -fno-common \
     -nostdlib -nostartfiles \
@@ -194,7 +196,7 @@ TEST_PASS
 
 | 参数 | 原因 |
 |---|---|
-| `-march=rv32im_zicsr` | core 是 RV32IM + Zicsr（demo 也用它） |
+| `-march=rv32imacf_zicsr` | core 是 RV32IMACF + Zicsr；默认启用 F 指令与 Zcf 压缩 load/store（`-mabi=ilp32` 仍是软浮点 ABI，浮点表达式由 GCC 生成 F 指令、结果经 fmv 往返） |
 | `-mabi=ilp32` | 32 位 ABI |
 | `-mcmodel=medany` | 不用 `gp` 基址，PC 相对寻址 |
 | `-msmall-data-limit=0` | 与上一条配套；否则小数据会走未初始化的 `gp` |
@@ -270,7 +272,7 @@ result[0] = 0x12345678;
 ### 5.1 UART
 
 ```c
-uart_init();                    // BAUD=433 (50 MHz/115200), TX_EN
+uart_init();                    // BAUD=867 (100 MHz/115200), TX_EN
 uart_puts("hello\n");
 uart_flush();                   // halt 前必须等最后一个停止位发完
 ```
@@ -306,7 +308,7 @@ GPIO_IRQ_PEND = 0x1;      // W1C：写 1 清 pending
 ### 5.3 SPI
 
 ```c
-SPI_CLKDIV = 24;
+SPI_CLKDIV = 49;
 SPI_CTRL   = SPI_CTRL_EN;        // 模式 0，MSB first
 SPI_CS     = 0x1;                // 拉低 cs_n[0]
 SPI_TXDATA = 0xA5;
@@ -400,7 +402,7 @@ cat build/app/uart.txt
 RISCV_PREFIX=riscv64-unknown-elf-
 APP=sw/lab
 
-${RISCV_PREFIX}gcc -march=rv32im_zicsr -mabi=ilp32 \
+${RISCV_PREFIX}gcc -march=rv32imacf_zicsr -mabi=ilp32 \
     -mcmodel=medany -msmall-data-limit=0 -O2 -ffreestanding \
     -nostdlib -nostartfiles -Wl,--no-relax -Wl,-T,sw/lib/app.ld \
     -I sw/lib -I $APP \

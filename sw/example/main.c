@@ -46,6 +46,18 @@ static int test_dtcm(void)
     return 0;
 }
 
+static int test_fp(void)
+{
+    volatile float a = 1.5f;
+    volatile float b = 2.5f;
+    volatile float c;
+    union { float f; unsigned int u; } v;
+
+    c = a * b;                          // 3.75 = 0x40700000, uses fmul.s
+    v.f = c;
+    return (v.u == 0x40700000u) ? 0 : 1;
+}
+
 static int test_gpio(void)
 {
     GPIO_DIR = 0x1;                         // bit 0 output
@@ -84,7 +96,7 @@ static int test_irq(void)
     irq_count = 0;
     soc_csrw_mtvec((unsigned int)trap_entry);
 
-    TIMER_CMP  = 5000u;
+    TIMER_CMP  = 10000u;                    // ~100 us at 100 MHz
     TIMER_CTRL = TIMER_CTRL_EN | TIMER_CTRL_IRQ_EN |
                  TIMER_CTRL_PENDING | TIMER_CTRL_PERIODIC;
     soc_csr_set_mie(MIE_MTIE);
@@ -119,6 +131,11 @@ int main(void)
 
     rc = test_gpio();
     uart_puts(rc ? "gpio FAIL\n" : "gpio ok\n");
+    if (rc)
+        goto out;
+
+    rc = test_fp();
+    uart_puts(rc ? "fp FAIL\n" : "fp ok\n");
     if (rc)
         goto out;
 

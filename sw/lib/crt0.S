@@ -11,6 +11,10 @@
 _start:
     la      sp, _stack_top
 
+    /* Enable the FPU (mstatus.FS = Initial) so hardware RV32F is usable. */
+    li      t2, 0x2000
+    csrs    mstatus, t2
+
     la      t0, _sbss
     la      t1, _ebss
 1:  bgeu    t0, t1, 2f

@@ -70,7 +70,7 @@ module spi (
     always @(posedge clk or negedge rstn) begin
         if (!rstn) begin
             ctrl     <= 32'b0;
-            clk_div  <= 32'd24;       // ~1 MHz SCLK at 50 MHz
+            clk_div  <= 32'd49;       // ~1 MHz SCLK at 100 MHz
             cs_reg   <= 4'b0;
             busy     <= 1'b0;
             done     <= 1'b0;

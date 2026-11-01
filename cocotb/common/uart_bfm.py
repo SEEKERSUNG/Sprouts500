@@ -1,19 +1,19 @@
 """UART bit-level helpers: decode the DUT's TX line and bit-bang RX.
 
 The UART is 8N1.  ``baud_div`` is the value in the BAUD register; the nominal
-bit length is ``baud_div + 1`` clocks (434 with the reset value 433).
+bit length is ``baud_div + 1`` clocks (868 with the reset value 867).
 
 ``decode_uart_tx`` samples ``uart_tx`` on every rising edge around a frame, so
 tests can both decode the byte and check that every level change happens on
 the expected bit grid.  Start it *before* writing TXDATA:
 
-    frame_task = cocotb.start_soon(decode_uart_tx(dut, baud_div=433))
+    frame_task = cocotb.start_soon(decode_uart_tx(dut, baud_div=867))
     await bm.write(UART_TXDATA, 0x55)
     frame = await frame_task
     assert frame.byte == 0x55
     assert frame.on_bit_grid()
 
-Measured rtl/uart.v timing (50 MHz, BAUD=433): the start bit lasts
+Measured rtl/uart.v timing (100 MHz, BAUD=867): the start bit lasts
 ``baud_div`` clocks (one clock short, because the counter starts at zero on
 the edge that leaves ST_IDLE), each data bit lasts ``baud_div + 1`` clocks,
 and the stop bit starts on the nominal grid; TX_DONE follows one nominal bit
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from cocotb.triggers import ReadOnly, RisingEdge
 
-DEFAULT_BAUD_DIV = 433
+DEFAULT_BAUD_DIV = 867
 
 
 @dataclass

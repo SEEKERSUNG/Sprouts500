@@ -1,12 +1,13 @@
 # 核心 cocotb 随机/定向验证
 
-本文件描述 `cocotb/core/` 下的 **core 级** cocotb 套件。它只测 `rtl/core.v`：
+本文件描述 `cocotb/core/` 下的 **core 级** cocotb 套件。它只测 `rtl/core.v` +
+`rtl/fp_unit.v`（core 及其浮点单元）：
 流水线、ITCM/DTCM、CSR/陷阱、中断入口、总线 master 和 M 扩展。SoC 集成、UART、
 SPI、GPIO、定时器寄存器等由独立的 `cocotb/soc/` 套件覆盖，两者互不引用。
 
 所有检查基于：
 
-- 一个独立的 RV32IM 参考解释器（`_helpers.RV32Interp`），逐条比较退休 trace、
+一个独立的 RV32IMAC 参考解释器（`_helpers.RV32Interp`，RVC 展开 + A；F 不在解释器范围内），逐条比较退休 trace、
   寄存器堆、ITCM/DTCM 镜像；
 - Python 断言直接采样 RTL 内部信号（`raw_stall`、`IF_ID_hold`、`id_flush_q`、
   `div_busy`、`pipe_freeze`、`bus_wait`、`bus_conflict`、`mem_*_we`、`csr_we` 等）；
@@ -25,7 +26,7 @@ bash scripts/run_cocotb.sh cocotb/core    # 推荐：统一日志/退出码
 期望（默认 3 个随机种子）：
 
 ```text
-64 passed
+77 passed
 ```
 
 只跑一个文件或一个用例：
@@ -40,13 +41,13 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
   `test_exec_rand.py`、`test_branch_rand.py`、`test_m_ext.py`、`test_mem_rand.py`、
   `test_hazard.py`；每个种子启动一次独立仿真。定向文件（`test_csr_trap.py`、
   `test_interrupt.py`、`test_bus.py`、`test_tcm_stall.py`、`test_forward.py`、
-  `test_branch_pred.py`）不受它影响。
+  `test_branch_pred.py`、`test_rvc.py`、`test_amo.py`、`test_fp.py`）不受它影响。
 - `test_hazard.py` / `test_mem_rand.py` 等还会读取仿真内的 `TB_SEED`；pytest
   参数与仿真种子一致，失败消息里会打印种子。
 - 构建产物：`build/cocotb_core/sim_build/`；cocotb 结果 XML：
   `build/cocotb_core/results/`。Icarus 增量编译，RTL/TB 不变时只有第一次慢。
 - 验证环境（Ubuntu 26.04，Icarus 12，cocotb 2.1.0，Python 3.14）默认 3 个种子约
-  **23 秒**跑完 64 项。
+  **25 秒**跑完 77 项。
 
 依赖：`.venv` 内安装 cocotb 2.1.0 与 pytest；Icarus 12 需在 `PATH` 中。core 套件的
 辅助代码全部在 `cocotb/core/_helpers.py` 内，不 import `cocotb/common/`。
@@ -76,7 +77,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | 组件 | 用途 |
 |---|---|
 | `Asm` | 迷你汇编器：R/I/S/B/U/J、M、CSR、ecall/ebreak/mret/wfi，`li`/`la`/标签/`org`/`halt` |
-| `RV32Interp` | 参考 RV32IM 解释器，记录退休 PC/IR、寄存器、ITCM/DTCM/总线窗口字节 |
+| `RV32Interp` | 参考 RV32IMAC 解释器（RVC 展开、LR/SC/AMO），记录退休 PC/IR、寄存器、ITCM/DTCM/总线窗口字节 |
 | `CoreHarness` | 时钟/复位/IRQ 驱动、层次化读寄存器与 TCM、退休 trace、信号计数 |
 | `BusSlave` | 假总线从设备：固定或按地址的 wait、初值、事务记录（地址/we/wstrb/wdata/周期） |
 | `check_trace` | 逐项比较退休 trace，失败时打印第一处差异附近的指令 |
@@ -88,7 +89,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 
 ## 3. 测试与架构不变量的对应
 
-`docs/architecture.md` §9 的编号如下（本套件覆盖 1–4、6–9、11–14；5 属于
+`docs/architecture.md` §9 的编号如下（本套件覆盖 1–4、6–9、11–14、15–22；5 属于
 外设套件，10 属于 ISA testbench 的 4 MiB ITCM）。
 
 | 文件 | 用例数（默认种子） | 主要目标 |
@@ -104,6 +105,9 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | `test_tcm_stall.py` | 7 | load-use 停顿深度、`IF_ID_hold`、`id_flush_q`、jalr link、div 冻结、TCM 写门控 |
 | `test_forward.py` | 12 | EX/MEM 距离的 ALU/mul/CSR/link/store/branch 前递、优先级、load-use 深度、div、trap 取消 |
 | `test_branch_pred.py` | 9 | BTB 训练/饱和、交替方向、嵌套/自循环、异常/中断不训练、JALR 目标变化、陈旧项、冻结 |
+| `test_rvc.py` | 6 | 压缩 ALU/访存展开、lane-1 32 位指令、C.J/C.JAL/C.JALR/C.BEQZ/C.BNEZ、链接值与 2 字节目标、HINT、保留编码、mepc 掩码、BTB 两个 lane、压缩循环预测 |
+| `test_amo.py` | 4 | 九个 AMO（DTCM/ITCM）、写脉冲、LR/SC 重叠/失效/陷阱、load 类停顿、div 冻结、AMO→总线、aq/rl、中断、非对齐/MMIO 陷阱 |
+| `test_fp.py` | 3 | FLW→FADD/FMUL 与 FP RAW 的 scoreboard/WB 旁路；fdiv 的 NX 累积与 fflags 清除；FS=Off 时浮点指令的非法陷阱与恢复 |
 
 逐条对应：
 
@@ -120,8 +124,19 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | 5 定时器 W1C bit 2 | 不在本套件：属 `cocotb/soc/` 与 demo |
 | 6 `bus_conflict` 分隔连续事务 | `test_bus[back_to_back,rand_stores,rand_loads]` |
 | 7 TCM 写由 `!pipe_freeze` 门控 | `test_tcm_stall[div_freeze_store,itcm_store]`、`test_hazard` DTCM 镜像 |
-| 8 `csr_we` 与 `trap_taken` 互斥 | `test_csr_trap[csr_ro_trap,illegal]`；`csr_we` 的 `!pipe_freeze` 门控由 `test_bus[csr_double_write]` 覆盖（见 §4） |
-| 9 `misa` 只声明 I/M | 本 core 套件只读回 `misa` 值而不检查位域；位域检查属 `cocotb/soc/` |
+| 8 `csr_we` 与 `trap_taken` 互斥 | `test_csr_trap[csr_ro_trap,illegal]`；`csr_we` 的 `!pipe_freeze`/`!mem_amo_active` 门控由 `test_bus[csr_double_write]`、`test_amo` 覆盖（见 §4） |
+| 9 `misa` 为 I/M/A/C/F | `test_csr_trap[csr_rw]` 检查 `0x4000_1125` |
+| 15 RVC 展开/非法压缩 | `test_rvc[alu_mem,illegal_hint]` |
+| 16 `if_hold`/`id_flush_q` 与预测重新查表 | `test_rvc[straddle,control]`、`test_branch_pred` |
+| 17 重定向到目标 word | `test_rvc[control,btb_lanes]`、`test_branch_rand` |
+| 18 链接长度/陈旧项纠正 | `test_rvc[control,btb_lanes]`、`test_branch_pred[stale_noncontrol]` |
+| 19 BTB 索引/tag | `test_rvc[btb_lanes,predicted]`、`test_branch_pred` |
+| 20 AMO 两拍/单次写 | `test_amo[amo_ops,hazards]` |
+| 21 LR/SC 重叠与保留 | `test_amo[lrsc]` |
+| 22 MMIO 原子陷阱 | `test_amo[traps]`、`test_csr_trap[amo_mmio]` |
+| 23-24 FPU start/done 与 FP scoreboard | `test_fp[hazards]` |
+| 25 FS=Off 陷阱、FS Dirty | `test_fp[fs_off]`、`test_fp[fflags]` |
+| 26-28 fflags/FLW-FSW/NaN 规则 | `test_fp[fflags]`；算术语义由 146 项 F ISA 测试覆盖 |
 
 另外，§6.2 总线行为（单 outstanding、`bus_wait`、读数据捕获、写选通）由
 `test_bus.py` 覆盖；§9 第 5 条（定时器 CTRL 的 W1C）不在 core 套件范围内。
@@ -179,9 +194,11 @@ wire csr_we = EX_valid && EX_csr_write && !trap_taken && !EX_illegal &&
 - **仿真器**：只用 Icarus Verilog 12（Verilog-2001 子集）。没有 SVA/断言，
   检查全部是 cocotb Python 采样 + 参考模型；因此不会捕获只在形式属性下暴露的
   活锁/死锁，也没有功能覆盖率指标。
-- **参考模型范围**：`RV32Interp` 不实现 SYSTEM 指令（CSR/ecall/mret/wfi）。CSR
+- **参考模型范围**：`RV32Interp` 现在支持 RVC 展开和 RV32A（LR/SC/AMO），但仍不实现
+  SYSTEM 指令（CSR/ecall/mret/wfi）和压缩非法陷阱；RVC/A 的定向用例使用手工期望值。CSR
   与陷阱用例使用手工期望值；中断用例通过程序把 `mcause`/`mepc` 写入 DTCM 再由
-  Python 检查。浮点、PMP、特权模式、delegation 均不在范围内（RTL 也未实现）。
+  Python 检查。RV32F 不在此解释器范围内，由官方 146 项 F ISA 测试覆盖；PMP、特权模式、
+  delegation 和 D 扩展未实现。
 - **随机性**：随机流集中在 ALU/分支/访存/M 扩展/RAW 距离；CSR、陷阱、总线等待
   是定向场景，没有随机 CSR 指令序列或随机异常注入。总线从设备没有错误响应、
   超时、乱序或多 outstanding 模型。
@@ -190,6 +207,6 @@ wire csr_we = EX_valid && EX_csr_write && !trap_taken && !EX_illegal &&
 - **配置**：core 套件固定 `ITCM_WORDS=4096`、`DTCM_WORDS=1024`、`RESET_PC=0`，
   不是 SoC 的 32 KiB ITCM 配置；TCM 通过层次化赋值预载，不走复位/总线。
 - **实现层面**：没有门级/综合后仿真，没有 SDF；时序签核仍由 `scripts/sta.sh`
-  负责。cocotb 套件不替代 ISA 46/46、demo 和综合门禁。
+  负责。cocotb 套件不替代 ISA 222/222、demo 和综合门禁。
 - **运行环境**：每项 pytest 用例启动一次独立 vvp；默认 3 种子约 16 秒，种子数
   增大时按随机文件数线性增长。结果 XML 只保留最近一次运行的记录。

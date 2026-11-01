@@ -22,6 +22,7 @@ TOPLEVEL = "tb_soc_bus"
 #: Files needed by the SoC testbench, in compile order (RTL first).
 SOURCES = (
     "rtl/core.v",
+    "rtl/fp_unit.v",
     "rtl/bus.v",
     "rtl/timer.v",
     "rtl/gpio.v",

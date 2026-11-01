@@ -72,8 +72,8 @@ async def test_bus_every_window_readable(dut):
     assert (await bm.read(FAKE + 0x1C)).data == _fake_expected(7)
     assert (await bm.read(TIMER)).data == 0
     assert (await bm.read(GPIO)).data == 0
-    assert (await bm.read(UART + 0x08)).data == 433
-    assert (await bm.read(SPI + 0x08)).data == 24
+    assert (await bm.read(UART + 0x08)).data == 867
+    assert (await bm.read(SPI + 0x08)).data == 49
     # addresses below the fake-slave window decode to zero and are ready
     assert (await bm.read(0x0000_5000)).data == 0
     assert (await bm.read(0x1000_0000)).data == 0
@@ -207,7 +207,7 @@ async def test_bus_hold_only_affects_fake_window(dut):
     dut.hold.value = 1
     # peripheral access is unaffected by the fake slave's ready
     r = await bm.read(UART + 0x08)
-    assert r.data == 433
+    assert r.data == 867
     assert r.wait_cycles == 0
     # a fake-slave access stalls until hold is dropped
     task = cocotb.start_soon(bm.read(FAKE + 0x0C))

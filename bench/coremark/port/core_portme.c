@@ -35,7 +35,7 @@ barebones_clock()
 {
     CORETIMETYPE c;
     /* The low half of `cycle` is enough: a benchmark run must stay below
-       2^32 cycles (85.9 s at 50 MHz); tb_bench enforces that with MAX_CYCLES. */
+       2^32 cycles (42.9 s at 100 MHz); tb_bench enforces that with MAX_CYCLES. */
     __asm__ volatile("rdcycle %0" : "=r"(c));
     return c;
 }
@@ -44,7 +44,7 @@ barebones_clock()
 #define MYTIMEDIFF(fin, ini)       ((fin) - (ini))
 #define TIMER_RES_DIVIDER          1
 #define SAMPLE_TIME_IMPLEMENTATION 1
-#define CLOCKS_PER_SEC             50000000
+#define CLOCKS_PER_SEC             100000000
 #define EE_TICKS_PER_SEC           (CLOCKS_PER_SEC / TIMER_RES_DIVIDER)
 
 CORETIMETYPE start_time_val, stop_time_val;

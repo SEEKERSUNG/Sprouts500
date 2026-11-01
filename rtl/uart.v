@@ -70,7 +70,7 @@ module uart (
     always @(posedge clk or negedge rstn) begin
         if (!rstn) begin
             ctrl        <= 32'b0;
-            baud_div    <= 32'd433;   // 50 MHz / 115200 - 1
+            baud_div    <= 32'd867;   // 100 MHz / 115200 - 1
             tx_state    <= ST_IDLE;
             tx_baud_cnt <= 32'b0;
             tx_bit      <= 3'b0;

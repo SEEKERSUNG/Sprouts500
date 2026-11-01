@@ -22,7 +22,7 @@
 void
 bench_uart_init(void)
 {
-    BENCH_UART_BAUD = 433u;
+    BENCH_UART_BAUD = 867u;
     BENCH_UART_CTRL = 0x1u;
 }
 

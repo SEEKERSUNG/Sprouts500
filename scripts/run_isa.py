@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and run the riscv-arch-test 2.x RV32I/RV32M suites on Sprouts500.
+"""Compile and run the riscv-arch-test 2.x RV32I/RV32M/RV32C/RV32A/RV32F suites on Sprouts500.
 
 For each test:
   - assemble/link with the RISC-V bare-metal GCC
@@ -10,7 +10,10 @@ For each test:
 Usage:
     python3 scripts/run_isa.py              # all tests
     python3 scripts/run_isa.py jalr-01      # one test
-    python3 scripts/run_isa.py I/beq-01 M/div-01
+    python3 scripts/run_isa.py I/beq-01 M/div-01 C/cadd-01 F/fadd_b1-01
+
+A bare test name selects it in every suite; a suite letter (I/M/C/A/F) selects
+the whole suite.  F needs a core with the RV32F extension.
 """
 from __future__ import annotations
 
@@ -28,10 +31,12 @@ BUILD = ROOT / "build" / "isa"
 LOGS = ROOT / "logs" / "isa"
 TB = ROOT / "sim" / "tb_core.v"
 CORE = ROOT / "rtl" / "core.v"
+FPU = ROOT / "rtl" / "fp_unit.v"
 LINK = ROOT / "sw" / "isa" / "link.ld"
 MODEL_INC = ROOT / "sw" / "isa"
 ENV_INC = ISA / "env"
 
+SUITES = ("I", "M", "C", "A", "F")
 MAX_CYCLES = 2_000_000
 JOBS = max(1, min(8, (os.cpu_count() or 4)))
 
@@ -89,9 +94,15 @@ def run_one(suite: str, name: str) -> dict:
     hexf = BUILD / f"{name}.hex"
     logf = LOGS / f"{name}.log"
 
-    march = "rv32i" if suite == "I" else "rv32im"
+    # C expands in IF to canonical 32-bit IR; -mabi=ilp32 applies to all.
+    MARCH = {"I": "rv32i", "M": "rv32im", "C": "rv32ic_zicsr", "A": "rv32ia_zicsr",
+             "F": "rv32if_zicsr"}
+    march = MARCH[suite]
+    # FLEN selects flw/fsw (FLREG/FSREG) and FREGWIDTH in arch_test.h.  It must
+    # be defined before arch_test.h, so pass it on the command line.
+    flen = ["-DFLEN=32"] if suite == "F" else []
     cc = [
-        GCC, f"-march={march}", "-mabi=ilp32", "-DXLEN=32",
+        GCC, f"-march={march}", "-mabi=ilp32", "-DXLEN=32", *flen,
         "-nostdlib", "-nostartfiles", "-static", "-mcmodel=medany",
         "-I", str(MODEL_INC), "-I", str(ENV_INC),
         "-T", str(LINK), str(src), "-o", str(elf),
@@ -147,7 +158,8 @@ def main() -> int:
     BUILD.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
 
-    r = run([IVERILOG, "-g2012", "-o", str(BUILD / "tb_core.vvp"), str(TB), str(CORE)])
+    r = run([IVERILOG, "-g2012", "-o", str(BUILD / "tb_core.vvp"),
+             str(TB), str(CORE), str(FPU)])
     if r.returncode != 0:
         print("testbench compile failed:")
         print(r.stdout)
@@ -155,10 +167,11 @@ def main() -> int:
 
     only = set(sys.argv[1:])
     tests: list[tuple[str, str]] = []
-    for suite in ("I", "M"):
+    for suite in SUITES:
         d = ISA / "rv32i_m" / suite / "src"
         for p in sorted(d.glob("*.S")):
-            if only and (p.stem not in only) and (f"{suite}/{p.stem}" not in only):
+            if only and (p.stem not in only) and (f"{suite}/{p.stem}" not in only) \
+                    and (suite not in only):
                 continue
             tests.append((suite, p.stem))
 

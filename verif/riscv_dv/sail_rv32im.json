@@ -302,7 +302,8 @@
    "mutable_misa": true
   },
   "C": {
-   "mutable_misa": true
+   "mutable_misa": false,
+   "supported": true
   },
   "V": {
    "support_level": "Disabled",
@@ -483,7 +484,7 @@
    "supported": false
   },
   "Zca": {
-   "supported": false
+   "supported": true
   },
   "Zcf": {
    "supported": false

@@ -16,6 +16,7 @@ from cocotb_tools.runner import get_runner
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 RTL_CORE = REPO / "rtl" / "core.v"
+RTL_FPU  = REPO / "rtl" / "fp_unit.v"
 TB = HERE / "tb_core_cocotb.v"
 BUILD_ROOT = REPO / "build" / "cocotb_core"
 BUILD_DIR = BUILD_ROOT / "sim_build"
@@ -71,7 +72,7 @@ def get_seeds(default: int = 3) -> int:
 def build(force: bool = False):
     runner = get_runner("icarus")
     runner.build(
-        sources=[TB, RTL_CORE],
+        sources=[TB, RTL_CORE, RTL_FPU],
         hdl_toplevel=TOPLEVEL,
         build_dir=BUILD_DIR,
         timescale=("1ns", "1ps"),

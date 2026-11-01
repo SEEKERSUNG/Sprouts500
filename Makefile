@@ -7,9 +7,9 @@ T ?=
 help:
 	@echo "Sprouts500 targets:"
 	@echo "  make setup        install Ubuntu host tools"
-	@echo "  make fetch-tests  fetch riscv-arch-test 2.x sources"
+	@echo "  make fetch-tests  fetch riscv-arch-test 2.x sources (I/M/C/F)"
 	@echo "  make fetch-lib    fetch Nangate45 Liberty"
-	@echo "  make isa          run all RV32I/RV32M ISA tests (T=name for one)"
+	@echo "  make isa          run all RV32I/M/C/F ISA tests + A directed (T=name or suite)"
 	@echo "  make demo         build and run the bare-metal SoC demo"
 	@echo "  make app APP=dir  build and run a user C program (e.g. sw/example)"
 	@echo "  make bench        run CoreMark and Dhrystone (BENCH=coremark|dhrystone)"

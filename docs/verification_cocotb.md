@@ -1,6 +1,6 @@
 # cocotb SoC 级验证
 
-本文件描述 `cocotb/soc/` 下的 SoC 级 cocotb 套件：它把 `rtl/core.v`、`rtl/bus.v`、
+本文件描述 `cocotb/soc/` 下的 SoC 级 cocotb 套件：它把 `rtl/core.v` + `rtl/fp_unit.v`、`rtl/bus.v`、
 四个外设和 `tb_soc_bus` 一起跑在 Icarus 下，用定向 + 随机测试覆盖总线、外设寄存器和
 core→总线的握手。core 流水线内部的定向测试在 `cocotb/core/` 套件中
 （见 `docs/verification_cocotb_core.md`），两者互不依赖。
@@ -58,7 +58,7 @@ bash scripts/run_cocotb.sh cocotb/soc -k uart -x       # 其余参数传给 pyte
 |---|---|
 | `cocotb/soc/tb_soc_bus.v` | SoC testbench：`soc_top` 的平铺复制 + 外部总线主控 + 慢速/假从设备 + ITCM 镜像加载 |
 | `cocotb/soc/fake_slave.v` | `0x3000_xxxx` 上的确定性从设备（64 word，`addr[7:2]` 索引，字节选通，`hold` 延后 `ready`） |
-| `cocotb/common/clock_reset.py` | 50 MHz 时钟（20 ns）、16 周期复位、`CycleCounter` |
+| `cocotb/common/clock_reset.py` | 100 MHz 时钟（10 ns）、16 周期复位、`CycleCounter` |
 | `cocotb/common/bus_master.py` | `BusMaster.write/read`（遵守 `req && !req_q` 边沿语义）、`read_held`/`write_held`、`drive_ready` |
 | `cocotb/common/uart_bfm.py` | UART TX 帧解码（校验位网格）、RX 位敲 |
 | `cocotb/common/spi_bfm.py` | SCLK 采样、SPI 回环传输 |
@@ -91,7 +91,7 @@ RTL 本身没有被修改。代价是：如果 `soc_top.v` 的连线变了，`tb
 
 ### 周期编号约定
 
-- 50 MHz，周期 20 ns；复位保持 16 个周期，`rstn` 与 `core_rstn` 在同一个边沿释放。
+- 100 MHz，周期 10 ns；复位保持 16 个周期，`rstn` 与 `core_rstn` 在同一个边沿释放。
 - 周期 1 = 复位释放后的第一个上升沿。`BusResult.commit_cycle` 表示处理该事务的那个
   上升沿（写在这一沿被外设采样，读数据也在这一沿捕获）；这个编号由仿真时间推导，
   不受协程调度影响。
@@ -115,7 +115,7 @@ RTL 本身没有被修改。代价是：如果 `soc_top.v` 的连线变了，`tb
 | `test_bus.py` | 每个窗口可读；外设/假从设备字节选通；未对齐地址透传；`read_held` 保持数据；`write_held` 只触发一次；`ext_ready` 停滞读和写；`hold` 只影响假从设备窗口；假从设备别名 |
 | `test_timer.py` | 复位值；COUNT 只读；PRE 分频；单次触发（EN 自清）；周期模式；W1C（写 `0x0f` 保持 EN/IE/PERIODIC）；IE 门控 IRQ；`addr[3:0]` 别名；120 步随机写/读对阵 `TimerModel` |
 | `test_gpio.py` | 复位值；DIR/OUT/IN 语义；外部驱动只在输入脚生效；字节选通；W1C；边沿中断与 IE 门控；`addr[7:0]` 别名（IN 写被忽略）；两级同步；80 步随机测试对阵 `GpioModel` |
-| `test_uart.py` | 复位值（BAUD=433）；TX 关闭/忙时忽略 TXDATA；TX 帧格式与位网格；TX_DONE 置位与保持；自定义波特率；RX 位敲（含自定义波特率）；帧错误；溢出；TX/RX IRQ；字节选通、`addr[7:0]` 别名、STATUS 只读；8 字节随机 TX→RX 回环 |
+| `test_uart.py` | 复位值（BAUD=867）；TX 关闭/忙时忽略 TXDATA；TX 帧格式与位网格；TX_DONE 置位与保持；自定义波特率；RX 位敲（含自定义波特率）；帧错误；溢出；TX/RX IRQ；字节选通、`addr[7:0]` 别名、STATUS 只读；8 字节随机 TX→RX 回环 |
 | `test_spi.py` | 复位值；CS 语义；四种 CPOL/CPHA × 两种位序回环；SCLK 半周期与 8 个时钟；BUSY/DONE、RXDATA 读清 DONE；IRQ；关闭/忙时忽略 TXDATA；CLKDIV 字节选通与别名；STATUS 只读；20 次随机回环；CLKDIV=1 接收错位记录 |
 | `test_core.py` | 汇编程序在真实 core 上跑：连续总线访问（`bus_conflict`）；不同外设连续 load；word/byte/half 存储后各种 load 扩展；TIMER 轮询 + W1C；GPIO 回读；假从设备 `hold` 与 `core_stall` 下 `bus_wait` 冻结、`req` 保持、不重复写 |
 
@@ -156,11 +156,11 @@ RTL 本身没有被修改。代价是：如果 `soc_top.v` 的连线变了，`tb
 1. **`rtl/spi.v`：CLKDIV=1 时接收错位一位。**
    `miso_s1 <= miso_s0;` 之后 `rx_shift <= miso_s1;` 在同一沿取到的是上一拍的
    `miso_s1`；MISO 经过两级同步，CLKDIV<=1 时采样点在位边界之后。回环下
-   `0x96` 收到 `0x4B`。CLKDIV>=2（含复位值 24）所有 CPOL/CPHA/位序都正确。
+   `0x96` 收到 `0x4B`。CLKDIV>=2（含复位值 49）所有 CPOL/CPHA/位序都正确。
    由 `test_spi_loopback_clkdiv_one_bit_skew` 记录（该测试在 RTL 修复后会失败，
    提示更新文档）。
-2. **`rtl/uart.v`：起始位短一拍。** 50 MHz、BAUD=433 时起始位 433 个时钟，数据位
-   每 bit 434 个时钟；发送网格整体偏一格。`decode_uart_tx`/`UartFrame` 按实测网格
+2. **`rtl/uart.v`：起始位短一拍。** 100 MHz、BAUD=867 时起始位 867 个时钟，数据位
+   每 bit 868 个时钟；发送网格整体偏一格。`decode_uart_tx`/`UartFrame` 按实测网格
    校验，功能（LSB first、停止位、TX_DONE 在停止位结束）正确。
 3. **UART 回环需要额外一级触发器。** testbench 直接把 `uart_tx` 接到 `uart_rx` 时，
    RX 的两级同步器晚两拍看到起始沿，高速率下丢掉前几位；`tb_soc_bus.v` 增加了

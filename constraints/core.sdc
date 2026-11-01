@@ -1,5 +1,5 @@
-# 50 MHz target, Nangate45 open cell library.
-create_clock -name clk -period 20.0 [get_ports clk]
+# 100 MHz target, Nangate45 open cell library.
+create_clock -name clk -period 10.0 [get_ports clk]
 
 # Setup margin for a first pre-CTS run.  Hold uncertainty is 0 here because the
 # clock is ideal (no CTS); re-run hold signoff after clock-tree insertion.

@@ -21,11 +21,11 @@ module tb_app;
     localparam ITCM_WORDS = 8192;                 // 32 KiB
     localparam HALT_IDX   = 32'h0000_7FFC >> 2;
     localparam RESULT_IDX = 32'h0000_7FF8 >> 2;
-    localparam CLKS_PER_BIT = 434;                // 50 MHz / 115200
+    localparam CLKS_PER_BIT = 868;                // 100 MHz / 115200
 
     reg clk = 1'b0;
     reg rstn = 1'b0;
-    always #10 clk = ~clk;                        // 50 MHz
+    always #5 clk = ~clk;                         // 100 MHz
 
     reg  [31:0] gpio_ext = 32'b0;
     reg         gpio_ext_en = 1'b0;

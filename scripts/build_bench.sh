@@ -12,8 +12,9 @@
 # optimisation flags; for Dhrystone the source is copied to build/ with only
 # that non-algorithmic pragma removed, so the benchmark logic is unchanged.
 #
-# The timing reference is the `cycle` CSR at 50 MHz (the SoC clock of
-# sim/tb_bench.v).  UART output is decoded by the testbench and printed.
+# The timing reference is the `cycle` CSR at 100 MHz (the SoC clock of
+# sim/tb_bench.v; the HZ/CLOCKS_PER_SEC constants in bench/*/port match it).
+# UART output is decoded by the testbench and printed.
 #
 # Output: build/bench/<name>.{elf,bin,hex}; logs/bench/<name>.{log,uart}
 set -euo pipefail
@@ -43,8 +44,12 @@ esac
 
 # Common code-generation flags; per-benchmark optimisation flags are added by
 # each builder.  TCM data is small, so no small-data/gp-relative addressing.
+# RV32IMACF: compressed code shrinks the image and the IF expander removes
+# redundant fetch cycles.  MARCH can be overridden to e.g. rv32im_zicsr for
+# an A/B comparison.
+MARCH="${MARCH:-rv32imacf_zicsr}"
 BASE_FLAGS=(
-    -march=rv32im_zicsr -mabi=ilp32
+    -march="$MARCH" -mabi=ilp32
     -mcmodel=medany -msmall-data-limit=0
     -g -ffreestanding -fno-common
     -I "$ROOT/bench/include" -I "$ROOT/bench/runtime"
@@ -85,7 +90,7 @@ lto_flags() {  # <opt flags...>
 }
 
 flags_str() {  # <opt flags...>
-    printf '%s -march=rv32im_zicsr' "$*"
+    printf '%s -march=%s' "$*" "$MARCH"
 }
 
 pack_hex() {
@@ -232,7 +237,7 @@ run_bench() {
 
 "$IVERILOG" -g2012 -o "$OUT/tb_bench.vvp" \
     "$ROOT/sim/tb_bench.v" \
-    "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/bus.v" \
+    "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" "$ROOT/rtl/bus.v" \
     "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
 
 rc=0

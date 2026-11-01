@@ -12,10 +12,10 @@ Sail 0.16 and the RTL can both execute byte-for-byte identically:
     because the generated init list is incomplete in some seeds.
   * The trap handler uses sp as its frame (no generated instruction writes
     sp), records mcause/mepc/mtval plus a trap counter at the linker symbol
-    `trap_record`, restores the GPRs and mret's to mepc+4 (compressed
-    instructions are disabled, so every instruction is 4 bytes).  Illegal
-    instructions therefore resume; the comparison itself uses the RTL `X`
-    exception events and the Sail exception log, the record is for evidence.
+    `trap_record`, restores the GPRs and mret's to mepc + instruction length
+    (2 or 4 bytes, since IALIGN=16).  Illegal instructions therefore resume;
+    the comparison itself uses the RTL `X` exception events and the Sail
+    exception log, the record is for evidence.
   * `test_done` is `li gp, 1` followed by a halt store to the linker symbol
     `halt_mailbox` and an infinite loop.  The generated ecall handler is not
     used (it writes the GPR dump to address 0, which is unmapped in Sail).
@@ -229,7 +229,16 @@ def stack_section(name, words, label):
 
 
 def trap_handler():
-    """Save GPRs on the user stack, record the trap, restore, mret to mepc+4."""
+    """Save GPRs on the user stack, record the trap, restore, mret past it.
+
+    The resume address is mepc + the length of the trapped instruction
+    (opcode[1:0] != 11 means 16-bit compressed), not a fixed +4.
+
+    Register discipline: x1 is saved/restored around the body (its slot is
+    still live when the resume address is computed, so a scratch register is
+    used for that), x2 is the frame pointer and is restored last, x4 is saved
+    at 16(x2) and reloaded before the restore loop.  CSR reads are plain
+    ``csrr`` (csrrs rd, csr, x0)."""
     F = "x2"          # frame pointer (sp - 128); sp is never written by the body
     L = ["                  addi x2, x2, -128",
          "                  sw x1, 4(x2)",
@@ -249,8 +258,15 @@ def trap_handler():
         "                  csrr x31, 0x343 # MTVAL",
         "                  sw x31, 0x48(x2)",
         "                  lw x31, 0x44(x2)",
-        "                  addi x31, x31, 4",
-        "                  csrw 0x341, x31 # resume after the trapping instruction",
+        "                  lhu x4, 0(x31) # trapped opcode",
+        "                  andi x4, x4, 3",
+        "                  li x1, 3",
+        "                  beq x4, x1, 1f # 32-bit instruction",
+        "                  addi x31, x31, 2 # compressed: resume at +2",
+        "                  j 2f",
+        "1:                addi x31, x31, 4 # 32-bit: resume at +4",
+        "2:                csrw 0x341, x31 # resume after the trapping instruction",
+        "                  lw x1, 4(x2)",
         "                  la x31, {}".format(TRAP_RECORD_SYM),
         "                  lw x4, 0x40(x2)",
         "                  sw x4, 0(x31) # mcause",
@@ -261,7 +277,6 @@ def trap_handler():
         "                  lw x4, 12(x31)",
         "                  addi x4, x4, 1",
         "                  sw x4, 12(x31) # trap count",
-        "                  lw x1, 4(x2)",
         "                  lw x4, 16(x2)",
     ]
     for r in range(3, 32):

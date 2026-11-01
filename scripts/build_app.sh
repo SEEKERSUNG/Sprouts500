@@ -54,8 +54,9 @@ TBVVP="$OUT/tb_app.vvp"
 LOG="$OUT/run.log"
 
 echo "compiling $APP_DIR"
+MARCH="${MARCH:-rv32imacf_zicsr}"
 "${RISCV_PREFIX}gcc" \
-    -march=rv32im_zicsr -mabi=ilp32 \
+    -march="$MARCH" -mabi=ilp32 \
     -mcmodel=medany -msmall-data-limit=0 \
     -O2 -g -Wall -Wextra -ffreestanding -fno-common \
     -nostdlib -nostartfiles \
@@ -81,7 +82,7 @@ PY
 
 iverilog -g2012 -o "$TBVVP" \
     "$ROOT/sim/tb_app.v" \
-    "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/bus.v" \
+    "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" "$ROOT/rtl/bus.v" \
     "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
 
 set +e

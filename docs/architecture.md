@@ -5,12 +5,13 @@
 
 ## 1. 目标
 
-- 最简的五级顺序 RV32IM core。
+- 最简的五级顺序 RV32IMACF core（RVC 在 IF 展开为 32 位指令；A 为 LR.W/SC.W +
+  AMO*.W；F 为 RV32F，浮点单元在 `rtl/fp_unit.v`）。
 - 一个自包含的 core 文件（`rtl/core.v`）；TCM 在内部。
 - 简易的单 outstanding 总线，一个文件。
 - 小而可读的外设：定时器、GPIO、UART、SPI。
 - 确定性、可综合的 Verilog-2001（对 Yosys/OpenSTA 友好），不使用 SystemVerilog。
-- 通过官方 `riscv-arch-test` RV32I/M 套件。
+- 通过官方 `riscv-arch-test` RV32I/M/C 套件与项目自带的 A 定向测试。
 
 ## 2. 流水线
 
@@ -23,7 +24,7 @@ PC/ITCM -> decode/regs -> ALU/branch/CSR -> TCM/bus access -> load align/reg wri
 
 | 级 | 主要寄存器 |
 |---|---|
-| IF | `IF_PC`、`IF_PC_q`、`if_rdata_q` |
+| IF | `IF_PC`、`IF_PC_q`、`if_rdata_q`、`if_rdata_hi_q` |
 | ID | `ID_PC`、`ID_IR`、`ID_valid`、`id_flush_q`、`IF_ID_*_hold` |
 | EX | `EX_*`（PC/IR/valid/opcode/funct/rs/rd/imm/operands/control） |
 | MEM | `MEM_*`（valid/rd/result/mem controls/addr/data/wstrb/load src） |
@@ -33,25 +34,42 @@ PC/ITCM -> decode/regs -> ALU/branch/CSR -> TCM/bus access -> load align/reg wri
 
 ### 2.1 IF 与 ITCM 读取级
 
-`IF_PC` 驱动 ITCM 取指读端口。ITCM 是同步的，所以地址 `A` 的指令会在 `A` 被驱动后的
-一个周期出现在 `if_rdata_q`。`IF_PC_q` 与 `IF_PC` 同步寄存，对应当前 `if_rdata_q` 的
-地址。在 IF/ID 边界：
+IF 每个周期读 ITCM 的**两个 word**：`IF_PC_q` 所在的 word（`if_rdata_q`）和下一个
+word（`if_rdata_hi_q`）。ITCM 因此有 3 个读端口（两个 IF、一个 MEM 数据）；TCM 是
+推断阵列，换成 SRAM 宏时需要 3R1W 或等价的双周期方案。`IF_PC_q` 是“正在送给 ID 的指令”的 PC（2 字节粒度），
+`IF_PC` 是下一个取指地址（`IF_PC_q + 2/4`，或预测目标）。
+
+`if_cur_half = IF_PC_q[1] ? if_rdata_q[31:16] : if_rdata_q[15:0]`：低两位是 `11` 时
+是 32 位指令（lane 0 直接用 `if_rdata_q`；lane 1 用
+`{if_rdata_hi_q[15:0], if_rdata_q[31:16]}`）；否则用 `rvc_expand()` 展开为规范 32 位
+IR（Zca + Zcf：含 C.FLW/C.FSW/C.FLWSP/C.FSWSP；保留/不支持的编码展开为
+`{16'b0, ci}`，由 ID 默认非法译码产生 cause 2，
+`mtval` 为零扩展的半字）。所有压缩指令都以 2 字节前进，因此 lane-1 的 32 位指令
+**不需要**装配气泡；第二个读端口只为它存在。
+
+在 IF/ID 边界：
 
 ```
-ID_IR <= if_rdata_q
-ID_PC <= IF_PC_q
+ID_IR <= if_insn_ir   (规范 32 位 IR)
+ID_PC <= if_insn_pc   (= IF_PC_q)
+ID_is_compressed <= if_insn_compressed
 ```
 
-因此 `ID_PC` 与 `ID_IR` 始终成对。
+因此 `ID_PC` 是真实的 2 字节对齐 PC，而 `ID_IR` 永远是 32 位；ID/EX/MEM 对指令宽度
+无感知，只有链接值（JAL/JALR 的 `EX_PC + (EX_is_compressed ? 2 : 4)`）、陈旧 BTB 项
+的 `EX_PC + len` 和 `mepc` 需要真实长度。
 
-`IF_PC` 在前端停顿或流水线冻结时保持。遇到陷阱、`mret` 或预测错误时跳到
-`redirect_pc`。
+`IF_PC` 在 `if_hold`（`pipe_freeze`、`raw_stall`、`bus_conflict`、`mem_amo_active`、
+`id_flush_q`）时保持 `IF_PC_q`。重定向时跳到 `{redirect_pc[31:1], 1'b0}`
+（目标所在 word），ITCM 读是 word 对齐的。
 
-分支预测在 IF 级：32 项直接映射 BTB，索引 `IF_PC[6:2]`、tag `IF_PC[31:7]`，
-每项一个 2-bit 饱和方向计数器。命中且计数器 `>=2` 时预测 taken，下一 `IF_PC`
-直接取 BTB 目标；否则顺序 `+4`。预测元数据与 `if_rdata_q`/`IF_PC_q` 同步寄存为
-`IF_pred_taken_q`/`IF_pred_target_q`，经 `IF_ID_pred_*_hold`、`ID_pred_*` 传到
-`EX_pred_*`。EX 用该指令自己的预测（不是新查表）与真实结果比较。
+分支预测在 IF 级：64 项直接映射 BTB，索引 `IF_PC[6:1]`、tag `IF_PC[31:7]`（IALIGN=16
+后 index 必须包含 PC[1] 并排除 PC[0]，同一 word 的两个 lane 各自有项），每项一个
+2-bit 饱和方向计数器。命中且计数器 `>=2` 时预测 taken，下一 `IF_PC` 直接取 BTB
+目标；否则顺序前进。预测元数据与 `IF_PC_q` 同步寄存为
+`IF_pred_taken_q`/`IF_pred_target_q`（只在正常前进或重定向边沿更新，停顿期间保持），
+经 `IF_ID_pred_*_hold`、`ID_pred_*` 传到 `EX_pred_*`。EX 用该指令自己的预测（不是
+新查表）与真实结果比较，训练使用 `EX_PC`（指令 PC，不是取指 word）。
 
 ### 2.2 为什么需要 `IF_ID_*_hold`
 
@@ -59,8 +77,8 @@ ID_PC <= IF_PC_q
 而该地址比 ID 指令*超前*一条）。如果没有 hold 寄存器，本应在释放周期进入 ID 的那条
 指令就会丢失。
 
-在任何 ID 不前进的周期（`raw_stall`、`pipe_freeze`、`bus_conflict`），core 把待处理的
-IF 指令（`if_rdata_q` / `IF_PC_q`）捕获到 `IF_ID_IR_hold` / `IF_ID_PC_hold`，并置位
+在任何 ID 不前进的周期（`raw_stall`、`pipe_freeze`、`bus_conflict`、`mem_amo_active`），
+core 把待处理的 IF 指令（`if_insn_ir` / `if_insn_pc` / `if_insn_compressed`）捕获到 `IF_ID_IR_hold` / `IF_ID_PC_hold`，并置位
 `IF_ID_hold`。当 ID 最终前进时，使用保存的这一对。这是正确性所必需的；删除它会导致
 每次停顿后丢掉每隔一条指令。
 
@@ -71,9 +89,10 @@ IF 指令（`if_rdata_q` / `IF_PC_q`）捕获到 `IF_ID_IR_hold` / `IF_ID_PC_hol
 
 `id_flush_q` 在复位后也初始为置位。时序为：
 
-1. 重定向边沿：`IF_PC <= target`，`ID_valid <= 0`，`id_flush_q <= 1`。
-2. 下一个边沿：目标读取已发出，但数据尚未出现在 `if_rdata_q`；`id_flush_q` 让 ID
-   保持无效并清除自身。
+1. 重定向边沿：`IF_PC_q <= target（位 0 清零）`，读取目标 word，`ID_valid <= 0`，
+   `id_flush_q <= 1`。
+2. 下一个边沿：`id_flush_q` 保持 `IF_PC`（目标 word 已呈现），ID 仍无效，并清除
+   `id_flush_q`；若 BTB 目标在重定向边沿被训练，这一拍重新查表取到新的预测。
 3. 再下一个边沿：ID 捕获目标指令。
 
 这带来约 3 个周期的控制流跳转惩罚。不要删除 `id_flush_q`；否则会把过期的顺序执行
@@ -81,7 +100,7 @@ IF 指令（`if_rdata_q` / `IF_PC_q`）捕获到 `IF_ID_IR_hold` / `IF_ID_PC_hol
 
 分支预测正确（方向与目标都命中）时，EX 不产生 `redirect`，因此没有冲刷和惩罚；
 预测错误时仍走上面的 `redirect`/`id_flush_q` 序列。陈旧 BTB 项命中非控制指令时，
-EX 以 `EX_PC+4` 纠正。预测只影响取指，错误路径指令永远不会到达 MEM。
+EX 以 `EX_PC + 指令长度` 纠正。预测只影响取指，错误路径指令永远不会到达 MEM。
 
 ## 3. 译码
 
@@ -94,7 +113,18 @@ EX 以 `EX_PC+4` 纠正。预测只影响取指，错误路径指令永远不会
 - `id_illegal`、`id_ecall`、`id_ebreak`、`id_mret`、`id_fence`
 - `id_imm`（按 opcode 选择 I/S/B/U/J）、`id_shamt`
 
-`id_ir` 在 `ID_valid=0` 时强制为 `NOP`，因此气泡会被无害译码。
+`id_ir` 在 `ID_valid=0` 时强制为 `NOP`，因此气泡会被无害译码。ID 只看规范 32 位 IR，
+RVC 展开在 IF 完成。
+
+A 扩展（opcode `0101111`，funct3 必须为 `010`）：
+
+- `id_amo` 覆盖 LR/SC/AMO，作为 load 类指令处理结果与相关性。
+- `LR.W`：`id_is_lr`、`id_mem_read`；`rd=old`；`rs2` 必须为 0，否则非法。
+- `SC.W`：`id_is_sc`、`id_mem_write`；`rd` 为 0（成功）/1（失败）。
+- `AMO*.W`（funct5 00000/00001/00100/01000/01100/10000/10100/11000/11100）：
+  `id_amo_rmw`、`id_mem_write`，`rd=old`。
+- 其它 funct5（含 Zacas 的 AMOCAS.W）为非法。`aq`/`rl` 接受并忽略（单 hart、顺序
+  执行，内存效果总是程序有序）。
 
 CSR 合法性在 ID 中由 `csr_valid()` / `csr_writable()` 检查：
 
@@ -109,22 +139,25 @@ CSR 合法性在 ID 中由 `csr_valid()` / `csr_writable()` 检查：
 EX 比 MEM 年轻，所以 EX 优先；同一周期有多个同名写者时取最年轻的值。
 
 ```
-ex_fwd_ok  = EX_valid  and EX_rd_write_req and !EX_mem_read
+ex_fwd_ok  = EX_valid  and EX_rd_write_req and !EX_mem_read and !EX_amo
              and !(ex_is_div and div_state != DIV_DONE)
-mem_fwd_ok = MEM_valid and MEM_rd_write_req and !MEM_mem_read
+mem_fwd_ok = MEM_valid and MEM_rd_write_req and !MEM_mem_read and !MEM_amo
 ```
 
 load 的读数据在 MEM->WB 边沿才寄存（`mem_*_rdata_q`/`bus_rdata_q`），所以 load
 生产者不能从 EX/MEM 前递；除法结果在 `DIV_DONE` 前也是 0，显式排除。其余 ALU、
 LUI/AUIPC、JAL/JALR link、CSR 旧值、mul 都可以从 EX 或 MEM 前递。
 
+AMO/LR/SC 的结果（旧内存值或 SC 状态）只在 MEM/WB 可用，因此与 load 完全一样：
+EX/MEM 不前递，消费者走 load-use 停顿。
+
 只有不可前递的生产者才停顿：
 
 ```
 id_dep_ex  = ID uses rsN and rsN == EX_rd and EX_rd_write_req and EX_rd != 0
-             and (EX_mem_read or divider not DONE)
+             and (EX_mem_read or EX_amo or divider not DONE)
 id_dep_mem = ID uses rsN and rsN == MEM_rd and MEM_rd_write_req and MEM_rd != 0
-             and MEM_mem_read
+             and (MEM_mem_read or MEM_amo)
 raw_stall  = id_dep_ex | id_dep_mem
 ```
 
@@ -157,9 +190,10 @@ raw_stall  = id_dep_ex | id_dep_mem
 ### 5.2 分支/跳转
 
 - 分支比较按需使用 `$signed` / 无符号。
-- 目标：JAL/分支为 `PC + imm`；JALR 为 `(rs1 + imm) & ~1`。
-- taken 传输时 `ex_target_misaligned` 产生陷阱（cause 0，tval=target）。
-- JAL/JALR 链接值为 `EX_PC + 4`。
+- 目标：JAL/分支为 `PC + imm`；JALR 为 `(rs1 + imm) & ~1`（只清 bit 0）。
+- IALIGN=16：分支/JAL 偏移是偶数、JALR 清 bit 0，所以 `ex_target[0]` 永远为 0，
+  cause 0 在架构上不可达；`ex_target_misaligned` 只检查 bit 0，用于防御性检查。
+- JAL/JALR 链接值为 `EX_PC + 指令长度`（压缩指令为 `EX_PC + 2`）。
 
 ### 5.3 M 扩展
 
@@ -193,8 +227,39 @@ mul_uu = zero_ext(rs1) * zero_ext(rs2)
   - `sh`：两个字节，由 `addr[1]` 选择。
   - `sw`：整个 word。
 - Load 携带 `EX_load_src`（0 无，1 ITCM，2 DTCM，3 总线）、大小、无符号标志。
-- 非对齐在 EX 产生陷阱（load cause 4，store cause 6，tval=address）。
-- 无 read-modify-write：字节/半字 store 使用 strobe。
+- 非对齐在 EX 产生陷阱（load/LR cause 4，store/AMO/SC cause 6，tval=address）。
+- 字节/半字 store 使用 strobe；AMO 的读改写只发生在 TCM（见 §6）。
+- AMO/LR/SC 访问 tag `>= 2`（总线/MMIO）时在 EX 直接产生访问错误（LR cause 5，
+  AMO/SC cause 7，tval=address），绝不驱动总线：简单总线没有原子事务，MMIO 读
+  可能有副作用，不能伪装成非原子的读+写。
+
+
+### 5.5 RV32F 浮点单元
+
+`misa` 的 F 位置 1（`0x4000_1125`）。浮点状态包括 32 个 32 位 FP 寄存器
+（`f0` 是普通寄存器，不是硬连线的零）、`fcsr`（`0x003`：`frm[7:5]`、`fflags[4:0]`）
+及其别名 `frm`（`0x002`）与 `fflags`（`0x001`），以及 `mstatus.FS[14:13]`。
+
+- 复位时 `mstatus.FS=00`（Off）；FS=Off 时任何浮点指令或 fcsr/ffrm/fflags 访问都在
+  EX 产生非法指令（cause 2）。执行任何浮点指令把 FS 置为 Dirty（11）；写 fcsr/frm/
+  fflags 也置 Dirty。陷阱和 `mret` 不改变 FS。
+- `fcsr`/`frm` 写入保留的 `frm=5..7` 是非法指令；rm 字段 101/110 保留，111（DYN）
+  使用 `frm`。
+- 浮点寄存器文件没有 EX/MEM 前递。FP 写者在 EX 或 MEM 时，ID 中的 FP 读者停顿到
+  写者进入 WB，再从 WB 旁路取数；FP→整数结果按普通整数结果前递，整数→FP 源
+  （`FCVT.S.W/WU`、`FMV.W.X`）按普通整数 load/前递规则处理。
+- `FLW`/`FSW` 使用 I/S 型立即数，经普通 MEM/TCM/总线路径；非对齐分别产生 cause 4/6。
+- 浮点算术在 `rtl/fp_unit.v` 中分四级执行：A 解包/规格化，B 特殊值判断与算术核心，
+  C（FMA 的加/规格化、除法/开方的迭代），R 舍入/打包。core 用一次 `fp_start` 脉冲
+  启动它，`fp_busy` 期间冻结 IF/ID/EX（与除法器相同），`fp_done` 有效那拍退休；结果
+  和 fflags 在 done 期间保持，直到下一条慢速浮点指令。所有 OP-FP 和 FMA 指令都走这条
+  路径；只有 FLW/FSW 仍在 MEM 完成。
+- 舍入模式支持 RNE/RTZ/RDN/RUP/RMM。NaN 结果统一为规范 qNaN `0x7fc00000`；
+  信号 NaN 或非法操作置 NV；`FSGNJ`/`FMV`/`FCLASS` 不置标志。`FMIN`/`FMAX`
+  按 RISC-V 规则返回非 NaN 操作数（双 NaN 返回规范 NaN）。FMA 为单次舍入的融合乘加，
+  `FDIV`/`FSQRT` 为迭代精确实现（56/32 次迭代），fflags 在指令退休时只累积一次。
+  延迟：普通 OP-FP 约 3 拍，FMA 约 4 拍，FDIV/FSQRT 约 60/35 拍；期间 EX 冻结，
+  但整数流水线在浮点指令之后才恢复（单发射、按序）。
 
 ## 6. MEM
 
@@ -203,8 +268,30 @@ mul_uu = zero_ext(rs1) * zero_ext(rs2)
 - ITCM 有两个独立读端口：`IF_PC`（取指）和 `MEM_addr`（数据）。
 - DTCM 有一个读端口（`MEM_addr`）。
 - 读输出是寄存的（`if_rdata_q`、`mem_itcm_rdata_q`、`mem_dtcm_rdata_q`）。
-- 写按字节：`if (MEM_wstrb[i]) mem[index][i*8 +: 8] <= MEM_wdata[...]`。
+- 写按字节：`if (mem_wstrb_eff[i]) mem[index][i*8 +: 8] <= mem_wdata_eff[...]`。
 - TCM 写由 `!pipe_freeze` 门控，因此冻结的 MEM 级不会重复写入同一 store。
+
+### 6.1.1 RV32A：两周期读改写与 LR/SC 保留
+
+AMO 在 MEM 占两拍：相位 0 读（`mem_amo_old` 取 `mem_itcm_rdata_q`/`mem_dtcm_rdata_q`），
+相位 1 用 `mem_wdata_eff = mem_amo_new`、`mem_wstrb_eff = 4'hf` 写一次，随后插入一个
+MEM 气泡；WB 在相位 1 的边沿寄存旧值与 `MEM_rd`。相位转换和写都由 `!pipe_freeze`
+门控，所以除法/总线冻结只会推迟、不会重复写；`instret` 只在相位 1 计数一次。
+`mem_amo_active` 同时保持 IF/ID/EX，并暂停 `csr_we`、`mret_taken`、预测纠错/训练。
+
+LR 是普通 load，在 MEM 提交时设置保留：`lr_resv_valid`/`lr_resv_addr`（4 字节粒度）。
+任何 SC（成功或失败）清除保留；对保留 word 的已提交 store/AMO 写清除它；任何陷阱
+保守地清除它（规范允许的伪失败）。SC 在 EX 用组合逻辑判断成功：
+
+```
+resv_eff_valid = mem_commit_sc ? 0 : mem_commit_lr ? 1 : lr_resv_valid
+resv_eff_addr  = mem_commit_lr ? {MEM_addr[31:2],2'b00} : lr_resv_addr
+ex_sc_conflict = mem_commit_store && ({MEM_addr[31:2],2'b00} == {EX_addr[31:2],2'b00})
+ex_sc_ok       = resv_eff_valid && (resv_eff_addr == word(EX_addr)) && !ex_sc_conflict
+```
+
+覆盖三个危险的流水线重叠：MEM 中刚提交的 LR 必须对 EX 中的 SC 可见；与 SC 同拍
+提交的同 word store/AMO 必须让它失败；MEM 中更老的 SC 会消费保留。SC 失败不写内存。
 
 TCM 是推断阵列。ASIC/FPGA 签核时请替换为 SRAM 宏或 block RAM；见
 `docs/toolchain.md`。
@@ -233,14 +320,17 @@ UART/FIFO 副作用。
 
 - `WB_rd_write_data` 选择 load lane/符号扩展或 `WB_result`。
 - 寄存器写：`if (WB_valid && WB_rd_write_req && WB_rd != 0)`。
-- `instret` 在有效指令离开 MEM 时递增（`!pipe_freeze && MEM_valid`）。
+- `instret` 在有效指令离开 MEM 时递增（`!pipe_freeze && MEM_valid`，AMO 的相位 0
+  除外，所以一条 AMO 只计一次）。
 - `cycle` 每个时钟递增。
 
 ## 8. CSR 与陷阱
 
-CSR：`mstatus`、`misa`（0x4000_1100）、`mie`、`mtvec`、`mstatush`（0）、`mscratch`、
+CSR：`mstatus`、`misa`（0x4000_1125：I/M/A/C/F）、`mie`、`mtvec`、`mstatush`（0）、`mscratch`、
 `mepc`、`mcause`、`mtval`、`mip`、`mvendorid/marchid/mimpid/mhartid`、
-`cycle/time/instret`（低/高）。
+`cycle/time/instret`（低/高），以及浮点 `fcsr`（0x003）、`frm`（0x002）、
+`fflags`（0x001）。`mstatus.FS` 为 Off 时浮点指令和这三个 CSR 的访问都产生非法指令；
+FS 语义见 §5.5。
 
 `mip` 由电平 IRQ 输入组合而成：
 
@@ -254,15 +344,16 @@ CSR：`mstatus`、`misa`（0x4000_1100）、`mie`、`mtvec`、`mstatush`（0）�
 
 异常来源（在 EX）：
 
-- 非法指令（cause 2，tval=instruction）
-- ecall（11）、ebreak（3）
-- load/store 非对齐（4/6，tval=address）
-- 指令地址非对齐（0，tval=target）
+- 非法指令（cause 2，tval=instruction；压缩非法指令的 tval 是零扩展的半字）
+- ecall（11）、ebreak（3，tval=PC，规范允许且 riscv-arch-test 参考签名使用）
+- load/LR 非对齐（4），store/AMO/SC 非对齐（6），tval=address
+- LR/SC/AMO 访问总线/MMIO（LR 5，AMO/SC 7，tval=address）
+- 指令地址非对齐（0）在 IALIGN=16 下不可达（保留检查）
 
 陷阱进入：
 
 ```
-mepc    <= EX_PC & ~3
+mepc    <= EX_PC & ~1      (mepc 只清 bit 0；CSR 写 mepc 同样只清 bit 0)
 mcause  <= cause
 mtval   <= tval
 mstatus.MPIE <= mstatus.MIE
@@ -296,8 +387,8 @@ PC <= mepc
 7. TCM 写由 `!pipe_freeze` 门控；不要让它们在除法冻结期间变成电平敏感。
 8. 陷阱写和 CSR 写通过 `csr_we`/`trap_taken` 互斥；`csr_we` 还受 `!pipe_freeze`
    门控，冻结的 CSR 指令只提交一次。
-9. `misa` 只声明 I 和 M。CSR 支持属于 privileged spec 行为；demo 使用
-   `-march=rv32im_zicsr` 编译。
+9. `misa` 为 `0x4000_1125`（I/M/A/C/F）。CSR 支持属于 privileged spec 行为；软件使用
+   `-march=rv32imacf_zicsr` 编译（`build_*.sh` 的 `MARCH` 可覆盖）。
 10. ISA testbench 的 ITCM 是 4 MiB，因为 `jal-01` 使用了约 1.7 MiB 对齐填充。
     SoC ITCM 是 32 KiB。
 11. 分支预测是纯性能特性：所有纠正都走唯一的 `redirect`/`redirect_pc`
@@ -306,12 +397,39 @@ PC <= mepc
     不能保存对 `IF_PC` 的实时查表结果（它比 ID 指令超前一条）。
 13. 2-bit BTB 计数器必须饱和；`btb_valid` 和计数器要复位，tag/target 由 valid
     门控。陈旧项命中非控制指令时由 `EX_PC+4` 纠正。
-14. 只有 load 生产者（以及未 DONE 的除法）会触发 `raw_stall`；x0 判断在所有
+14. 只有 load/AMO/LR/SC 生产者（以及未 DONE 的除法）会触发 `raw_stall`；x0 判断在所有
     前递/旁路之前。
+15. RVC：`if_rdata_q` 是包含 `IF_PC_q` 的 word；`if_rdata_hi_q` 是其下一个 word；
+    `IF_PC_q` 是呈现指令的 PC，`IF_PC` 是取指地址。压缩指令展开为规范 32 位 IR，
+    非法压缩编码展开为 `{16'b0, ci}`。
+16. `if_hold` 期间保持 `IF_PC_q` 与 `IF_pred_*_q`；`id_flush_q` 同样保持 IF，并在
+    重定向后的那一拍重新查表（BTB 在重定向边沿被训练）。
+17. 重定向取指地址是目标所在 word（`{redirect_pc[31:1],1'b0}`）；`IF_PC_q` 本身
+    保留 bit 1。
+18. 链接值与陈旧 BTB 纠正使用 `EX_PC + 指令长度`。
+19. BTB 索引是 `PC[6:1]`、tag `PC[31:7]`；训练用 `EX_PC`。
+20. AMO 在 MEM 占两拍、只写一次；相位转换与写由 `!pipe_freeze` 门控；`instret`
+    只在相位 1 计数。
+21. SC 成功/失败必须看到 MEM 中的 LR、同拍提交的同 word store/AMO 与更老的 SC
+    （组合重叠逻辑）；保留粒度是一个 word，任何陷阱都会清除保留。
+22. AMO/LR/SC 访问 tag `>=2` 在 EX 陷阱（5/7），绝不驱动总线。
+
+
+23. 所有 OP-FP/FMA 指令都是慢速指令：`fp_start` 只在指令第一次进入 EX 时脉冲一次，
+    `fp_done`/结果保持到下一次 start。不要把它们改回单周期组合输出，否则会重新引入
+    EX→MEM 的超长路径（100 MHz 时序门禁会失败）。
+24. FP 寄存器文件没有前递：EX/MEM 的 FP 写者通过 `id_fp_stall` 停住 ID，WB 旁路提供
+    数据；`f0` 是可写寄存器，不能套用整数 x0 的规则。
+25. `mstatus.FS` 复位为 Off；FS=Off 的浮点/fcsr 访问必须陷阱。只有 FP 指令执行或
+    fcsr 写才把 FS 置 Dirty；陷阱/mret 不改 FS。
+26. `fcsr`/`frm` 的保留模式写入是非法指令；rm=111 从 `frm` 取有效模式。
+27. `FLW`/`FSW` 分别使用 I/S 立即数；它们的非对齐陷阱是 cause 4/6。
+28. NaN 统一为规范 qNaN，NV/DZ/OF/UF/NX 的置位和 FMIN/FMAX/比较的 NaN 规则必须与
+    RISC-V SoftFloat 一致（见 `rtl/fp_unit.v`）。
 
 ## 10. 复位
 
-- `IF_PC = RESET_PC`（默认 0），`IF_PC_q = RESET_PC`。
+- `IF_PC_q = RESET_PC`（默认 0）。
 - 所有 valid 位为 0；`id_flush_q=1`。
 - TCM 和寄存器堆不复位（x0 读为 0；其他寄存器由软件初始化）。
 - BTB 的 `btb_valid` 与方向计数器复位为 0；tag/target 不复位，由 valid 保证只在
@@ -320,11 +438,17 @@ PC <= mepc
 
 ## 11. 性能汇总
 
-- ALU 操作：稳态 1 周期/指令。
+- ALU 操作：稳态 1 周期/指令；压缩指令同样 1 周期（IF 展开，无气泡）。
 - ALU 相关：0 停顿（EX/MEM->ID 前递）。
 - load-use：2 个停顿周期（load 到 WB 才能旁路）。
 - 预测正确的 taken 分支/跳转：无冲刷惩罚；首次执行/预测错误约 3 周期。
 - JALR 返回地址每次变化时（无 RAS）会持续预测错误。
 - `mul`：1 周期。
 - `div/rem`：约 33 周期，整个流水线冻结；结果在 DONE 后可前递。
+- AMO：MEM 占 2 拍 + 1 个气泡（3 周期/条）；LR 同普通 load；SC 1 周期。
+- 压缩代码：静态体积约减少 25–30%，动态指令数减少，取指每拍都能送出一条 16 位
+  指令（32 位的 lane-1 指令也不再额外占拍）。
+- CoreMark best（RV32IMACF，benchmark 不含浮点）289.69（345,197 周期，2.90 CoreMark/MHz，100 MHz）；同源码
+  RV32IM 基线 284.3（351,767 周期）。Dhrystone best（RV32IMACF）248,690（201,053 周期，
+  1.415 DMIPS/MHz），ground 135,660（368,567 周期，0.772 DMIPS/MHz）。
 - UART/SPI/定时器为内存映射；无 DMA。

@@ -8,7 +8,7 @@
 #include "coremark.h"
 #include "bench_port.h"
 
-#define BENCH_HZ 50000000u
+#define BENCH_HZ 100000000u
 
 int coremark_main(void);
 

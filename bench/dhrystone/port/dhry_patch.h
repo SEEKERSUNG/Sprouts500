@@ -3,8 +3,9 @@
  * minimum prototypes are supplied here.
  *
  * Timing: dhrystone.h uses `read_csr(mcycle)` when __riscv is defined; HZ is
- * 1 MHz, so Microseconds = ticks and Dhrystones/s is computed correctly from
- * 50 MHz cycles.  tb_bench enforces a long enough run to avoid 32-bit wrap.
+ * 100 MHz, so Microseconds = ticks / 100 and Dhrystones/s is computed
+ * correctly from 100 MHz cycles.  tb_bench enforces a long enough run to
+ * avoid 32-bit wrap.
  */
 #ifndef DHRY_PATCH_H
 #define DHRY_PATCH_H
