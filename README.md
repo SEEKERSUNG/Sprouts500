@@ -278,3 +278,27 @@ Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是�
 ## 写在最后
 
 本项目始于2023年，前序项目是[Sprouts100](https://github.com/SEEKERSUNG/Sprouts100)。Sprouts100是我大三时为了学习RISC-V处理器设计、数字集成电路、计算机原理等相关知识而开发的。后来，我又设计了一个2级流水、性能更强的核心，并独立完成了除法器、数据前递（forwarding）等针对性优化。但受限于时序，该核心在Xilinx A7 35T FPGA上最高只能跑到48 MHz。于是，2023年读研期间，我利用业余时间开发了采用5级流水的本项目，以进一步优化时序；不过，分支预测错误带来的额外开销也会对性能造成不小影响。后来由于学业繁忙，我无暇继续推进本项目。所幸AI时代到来，它可以帮我完成大量编码和验证工作，我只需作为“架构师”补全和完善项目。未来，本项目将在保持简洁设计的同时，继续向更高性能探索，努力实现MCU“小钢炮”的目标。
+
+## 引用与参考
+
+本项目在实现和验证中使用了以下上游项目。`tests/isa/`、`bench/raw/`、`verif/riscv_dv/vendor/`
+和 `lib/` 中 vendored 的文件保留其原始版权头/许可证；其余项目作为工具或语义参考使用，
+未复制其代码。
+
+| 项目 | 用途 | 许可证 / 说明 | 链接 |
+|---|---|---|---|
+| riscv-arch-test (old-framework-2.x) | RV32I/M/C/F 官方 ISA 测试、参考签名、`arch_test.h`/`encoding.h` | BSD-3-Clause；测试由 riscv_ctg 生成 | <https://github.com/riscv/riscv-arch-test/tree/old-framework-2.x> |
+| riscv_ctg（IIT Madras） | 生成 arch-test 源码与参考签名 | 见上游仓库 | <https://gitlab.com/incoresemi/riscv-compliance/riscv_ctg> |
+| Sail RISC-V model 0.16 | riscv-dv lockstep 的指令级黄金模型 | BSD-2-Clause | <https://github.com/riscv/sail-riscv> |
+| riscv-dv (chipsalliance, pyflow 快照) | 约束随机指令生成 | Apache-2.0；vendored 于 `verif/riscv_dv/vendor/` | <https://github.com/chipsalliance/riscv-dv> |
+| pyvsc / pyucis | riscv-dv 的 Python 依赖（vendored wheels） | Apache-2.0 | <https://github.com/fvutils/pyvsc>、<https://github.com/fvutils/pyucis> |
+| Berkeley SoftFloat 3e | FPU 舍入、NaN 传播和 fflags 的语义参考（未 vendored） | BSD-3-Clause | <https://github.com/ucb-bar/berkeley-softfloat-3> |
+| RISC-V ISA Manual | RV32F/A/C、CSR、陷阱与浮点语义 | CC BY 4.0 | <https://github.com/riscv/riscv-isa-manual> |
+| CoreMark (EEMBC) | 性能测试源码 | Apache-2.0，另受 EEMBC COREMARK Acceptable Use/Trademark 条款约束 | <https://github.com/eembc/coremark> |
+| Dhrystone（riscv-tests 版本） | 性能测试源码 | BSD-3-Clause（Regents of the University of California） | <https://github.com/riscv-software-src/riscv-tests/tree/master/benchmarks/dhrystone> |
+| Nangate45 Open Cell Library | Yosys/OpenSTA 使用的标准单元 Liberty | 文件头声明为 Nangate Inc. 专有材料，不属于项目自有代码的许可证范围；公开再分发前请确认或替换 | `lib/NangateOpenCellLibrary_typical.lib`（见文件头） |
+| Yosys / OpenSTA / Icarus Verilog / cocotb / RISC-V GNU toolchain | 综合、时序、仿真、验证和编译工具 | 各自上游许可证（ISC / GPL-3.0 / GPL-2.0 / BSD-3-Clause / GPL + runtime exception） | 各项目主页 |
+
+设计方法上还参考了处理器/RTL 工程类 agent skill 的检查清单（未包含其代码）：
+[WaterHand Processor Development Skills](https://github.com/sixblade325/WaterHand-Processor-Development-Skills)
+和 [rtl-skills](https://github.com/phamcuong21478/rtl-skills)。
