@@ -70,8 +70,8 @@ MAGIC = 0x600D_1234
 EXPECTED = {
     "fake_rd0": 0xA5A5_0000,
     "fake_rd1": 0xA5A5_0001,
-    "uart_baud": 433,
-    "spi_clkdiv": 24,
+    "uart_baud": 867,
+    "spi_clkdiv": 49,
     "store_load": 0xDEAD_BEEF,
     "merge_word": 0xBEEF_AB0D,
     "merge_lb0": 0x0000_000D,

@@ -242,7 +242,7 @@ int main (int argc, char** argv)
 
   {
     unsigned int dmips_milli = (unsigned int)
-        (((unsigned long long)Dhrystones_Per_Second * 1000ull) / (1757ull * 50ull));
+        (((unsigned long long)Dhrystones_Per_Second * 1000ull) / (1757ull * 100ull));
     unsigned int dmips = (unsigned int)(Dhrystones_Per_Second / 1757);
 
     printf("DMIPS:                                      %u\n", dmips);

@@ -1,7 +1,7 @@
 """UART peripheral tests (rtl/uart.v).
 
 Covered:
-* reset values (docs/registers.md section 8), including BAUD=433;
+* reset values (docs/registers.md section 8), including BAUD=867;
 * TX disabled (TX_EN=0) ignores TXDATA writes;
 * TX frame format: start bit, LSB-first data, stop bit, one bit every
   BAUD+1 clocks (default 434), TX_BUSY during the frame and TX_DONE only at
@@ -113,7 +113,7 @@ async def test_uart_reset_values(dut):
     bm = await _setup(dut)
     assert (await bm.read(CTRL)).data == 0
     assert (await bm.read(STATUS)).data == 0
-    assert (await bm.read(BAUD)).data == 433
+    assert (await bm.read(BAUD)).data == 867
     assert (await bm.read(RXDATA)).data == 0
     assert (await bm.read(TXDATA)).data == 0      # write-only, reads as 0
     assert (await bm.read(UART + 0x1C)).data == 0
@@ -326,9 +326,9 @@ async def test_uart_rx_irq(dut):
 async def test_uart_baud_byte_lanes_and_alias(dut):
     bm = await _setup(dut)
     await bm.write(BAUD, 0x0000_00FF, wstrb=0b0001)
-    assert (await bm.read(BAUD)).data == 0x1FF
+    assert (await bm.read(BAUD)).data == 0x3FF
     await bm.write(BAUD, 0xAB00_0000, wstrb=0b1000)
-    assert (await bm.read(BAUD)).data == 0xAB00_01FF
+    assert (await bm.read(BAUD)).data == 0xAB00_03FF
     await bm.write(BAUD, 0x0000_1100, wstrb=0b0010)
     assert (await bm.read(BAUD)).data == 0xAB00_11FF
     # no byte strobe: write ignored

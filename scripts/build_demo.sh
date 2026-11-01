@@ -5,7 +5,8 @@ source "$ROOT/scripts/env.sh"
 
 mkdir -p "$ROOT/build"
 
-"${RISCV_PREFIX}gcc" -march=rv32im_zicsr -mabi=ilp32 -O2 \
+MARCH="${MARCH:-rv32imacf_zicsr}"
+"${RISCV_PREFIX}gcc" -march="$MARCH" -mabi=ilp32 -O2 \
     -nostdlib -nostartfiles -ffreestanding -Wl,--no-relax \
     -T "$ROOT/sw/demo/link.ld" \
     "$ROOT/sw/demo/start.S" "$ROOT/sw/demo/trap.S" "$ROOT/sw/demo/main.c" \
@@ -26,7 +27,7 @@ PY
 
 iverilog -g2012 -o "$ROOT/build/tb_soc.vvp" \
     "$ROOT/sim/tb_soc.v" \
-    "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/bus.v" \
+    "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" "$ROOT/rtl/bus.v" \
     "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
 
 vvp "$ROOT/build/tb_soc.vvp" "+ITCM_HEX=$ROOT/build/demo.hex" +MAX_CYCLES=500000

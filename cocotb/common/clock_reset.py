@@ -1,6 +1,6 @@
 """Clock, reset and cycle-count helpers shared by the SoC tests.
 
-The SoC runs at 50 MHz (20 ns period); reset is held for 16 cycles like
+The SoC runs at 100 MHz (10 ns period); reset is held for 16 cycles like
 ``sim/tb_app.v``.  ``start_clock`` remembers the running Clock so a second
 call in the same test (or after a reset) does not start a duplicate driver.
 """
@@ -10,12 +10,12 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
-CLK_PERIOD_NS = 20
+CLK_PERIOD_NS = 10
 RESET_CYCLES = 16
 
 
 def start_clock(dut, period_ns: int = CLK_PERIOD_NS) -> None:
-    """Start a 50 MHz clock on ``dut.clk`` unless one is already running.
+    """Start a 100 MHz clock on ``dut.clk`` unless one is already running.
 
     cocotb 2 cancels tasks spawned by a test when the test ends, so the clock
     must be restarted by the next test in the same simulation.  The stored

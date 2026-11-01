@@ -8,18 +8,18 @@
 任何 RTL 修改后运行：
 
 ```bash
-python3 scripts/run_isa.py     # 期望：46/46 通过
+python3 scripts/run_isa.py     # 期望：222/222 通过（I/M/C/F 官方 + A 定向）
 bash scripts/build_demo.sh     # 期望：TEST_PASS
 bash scripts/build_app.sh sw/example   # 自写 C 运行时；期望 TEST_PASS
 bash scripts/setup_cocotb.sh   # 一次性：.venv + cocotb/pytest（需要 python3.14-dev）
-bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 64 全部通过
+bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 77 全部通过
 bash scripts/setup_riscv_dv.sh # 一次性：.venv-dv + Sail；见 docs/verification_riscv_dv.md
-bash scripts/run_riscv_dv.sh   # 期望：随机种子全部 lockstep PASS
+bash scripts/run_riscv_dv.sh   # 期望：6/6 lockstep PASS（3 随机 + 定向陷阱/A/C）
 bash scripts/synth.sh          # 期望：Yosys 完成并写出 build/syn/core_netlist.v
 bash scripts/sta.sh            # 在 sudo bash scripts/setup_opensta.sh 之后；期望 setup/hold MET
 ```
 
-`scripts/sta.sh` 在 50 MHz 下当前报告 setup **+16.01 ns**、hold **+0.058 ns**、
+`scripts/sta.sh` 在 100 MHz 下当前报告 setup **+3.251 ns**、hold **+0.083 ns**、
 TNS/WNS **0.00**（OpenSTA 3.1.0，理想时钟，2-word TCM 时序配置）。时钟尚未做 CTS，
 因此 CTS 后以及换用 SRAM 宏后需要重新跑 hold 签核。
 
@@ -49,7 +49,7 @@ cocotb `test_mem_rand` / `test_core` 覆盖，详见 `docs/verification_riscv_dv
 
 | 改了什么 | 需要跑 |
 |---|---|
-| `rtl/core.v` | `run_isa.py`、`build_demo.sh`、`build_app.sh`、`run_cocotb.sh`、`run_riscv_dv.sh`、`synth.sh`（涉及时序再 `sta.sh`） |
+| `rtl/core.v`、`rtl/fp_unit.v` | `run_isa.py`、`build_demo.sh`、`build_app.sh`、`run_cocotb.sh`、`run_riscv_dv.sh`、`synth.sh`（涉及时序再 `sta.sh`） |
 | `rtl/bus.v`、`rtl/timer.v`/`gpio.v`/`uart.v`/`spi.v`、`rtl/soc_top.v` | `build_demo.sh`、`build_app.sh`、`run_cocotb.sh`（SoC 套件）；ISA 只编译 core，覆盖不到这些 |
 | `sim/tb_core.v` | `run_isa.py` |
 | `sim/tb_soc.v` | `build_demo.sh` |
@@ -59,7 +59,7 @@ cocotb `test_mem_rand` / `test_core` 覆盖，详见 `docs/verification_riscv_dv
 | `bench/`、`sim/tb_bench.v` | `build_bench.sh`（性能分数，不是功能门禁） |
 | `constraints/core.sdc` | `synth.sh` 后 `sta.sh` |
 
-注意：`scripts/synth.sh` 目前只综合 `rtl/core.v`，不综合总线/外设/`soc_top.v`；
+注意：`scripts/synth.sh` 目前只综合 `rtl/fp_unit.v` + `rtl/core.v`，不综合总线/外设/`soc_top.v`；
 `scripts/sta.sh` 读的是 `build/syn/core_netlist.v`，所以必须先 `synth.sh` 再
 `sta.sh`。
 
@@ -87,6 +87,11 @@ bash scripts/run_riscv_dv.sh 7
 
 - `tests/isa/rv32i_m/I/src/*.S` 与 `references/*.reference_output`（38 个测试）
 - `tests/isa/rv32i_m/M/src/*.S` 与 `references/*.reference_output`（8 个测试）
+- `tests/isa/rv32i_m/C/src/*.S` 与 `references/*.reference_output`（27 个测试）
+- `tests/isa/rv32i_m/F/src/*.S` 与 `references/*.reference_output`（146 个测试，
+  上游 old-framework-2.x 的 RV32F 套件；`fetch_isa.py` 会增量抓取，部分源文件很大）
+- `tests/isa/rv32i_m/A/src/*.S` 与 `references/*.reference_output`（项目自带的 3 个
+  定向测试：`amo_w-01`、`lrsc-01`、`amo_trap-01`；上游 old-framework 树没有 A 套件）
 - `tests/isa/env/arch_test.h`、`encoding.h`
 
 `scripts/fetch_isa.py` 需要时重新下载。默认使用 `raw.githubusercontent.com`；
@@ -96,14 +101,16 @@ bash scripts/run_riscv_dv.sh 7
 
 `scripts/run_isa.py` 对每个测试：
 
-1. 使用 `riscv64-unknown-elf-gcc -march=rv32i|rv32im -mabi=ilp32
-   -nostdlib -nostartfiles -static -mcmodel=medany -DXLEN=32` 编译。
+1. 使用 `riscv64-unknown-elf-gcc -march=rv32i|rv32im|rv32ic_zicsr|rv32ia_zicsr|rv32if_zicsr -mabi=ilp32
+   -nostdlib -nostartfiles -static -mcmodel=medany -DXLEN=32` 编译（F 套件另加
+   `-DFLEN=32`，使 `arch_test.h` 选择 `flw/fsw`）。
 2. 使用 `sw/isa/link.ld` 链接：代码位于 0，data/signature 位于代码之后的
    `ALIGN(0x1000)`，不使用固定的 0x8000。
 3. 把 ELF 转换成扁平二进制，并打包成 32 位 word 的 hex 文件。
 4. 从 `nm` 读取 `begin_signature`。
 5. 在 Icarus 下运行 `sim/tb_core.v`。
-6. 比较 `dut.ITCM[begin_signature + 4*i]` 与参考 word `i`。
+6. 比较 `dut.ITCM[begin_signature + 4*i]` 与参考 word `i`。F 套件的参考签名较大，
+   testbench 的 `ref_mem` 已扩到 131072 word。
 
 ### 2.3 Testbench 细节
 
@@ -145,16 +152,17 @@ LA(rd,5b)
 
 ### 2.5 已知预期结果
 
-46/46 在 Ubuntu 26.04 通过（GCC 14.2，Icarus 12）。每个测试的日志在
+222/222（I 38 + M 8 + C 27 + F 146 官方套件，加上项目自带的 A 定向 3 个）在 Ubuntu 26.04
+通过（GCC 14.2，Icarus 12）。每个测试的日志在
 `logs/isa/<name>.log`。失败日志会打印 `SIG_MISMATCH idx=... got=... exp=...`。
 
 ## 3. SoC demo
 
 `bash scripts/build_demo.sh`：
 
-1. 使用 `-march=rv32im_zicsr` 编译 `sw/demo/start.S`、`trap.S`、`main.c`。
+1. 使用 `-march=rv32imacf_zicsr` 编译 `sw/demo/start.S`、`trap.S`、`main.c`。
 2. 把镜像打包成 ITCM word。
-3. 在 50 MHz 下运行 `sim/tb_soc.v`。
+3. 在 100 MHz 下运行 `sim/tb_soc.v`。
 
 预期 UART 输出：
 
@@ -170,13 +178,13 @@ TEST_PASS cycles=<n>
 
 - ITCM 取指/load/store、栈（demo 的 `.data`/`.bss`/栈都在 ITCM）。
 - 总线读/写、连续总线访问（`bus_conflict`）。
-- UART TX 轮询，以及 115200 下的时序（50 MHz 时每比特 434 个时钟）。
+- UART TX 轮询，以及 115200 下的时序（100 MHz 时每比特 868 个时钟）。
 - 定时器计数和 W1C pending。
 - GPIO 方向/输出。
 - 机器定时器中断：`mtvec`、`mstatus.MIE`、`mie.MTIE`、`mepc`、`mcause`、
   陷阱进入/返回、`mret`；C ISR 由汇编陷阱处理程序调用。
 
-`sim/tb_soc.v` 以 434 个时钟的位周期解码 `uart_tx`，把字节追加到 `rx_buf`，并与
+`sim/tb_soc.v` 以 868 个时钟的位周期解码 `uart_tx`，把字节追加到 `rx_buf`，并与
 40 字节预期字符串比较。halt mailbox 是 `0x7FFC`（32 KiB ITCM 顶部）；demo 在 UART
 排空后写入。
 
@@ -245,9 +253,9 @@ Plusarg：`+ITCM_HEX=`、`+MAX_CYCLES=`、`+VCD`。
 
 `bash scripts/synth.sh` 在 CPU 时序运行时把 ITCM/DTCM 设为 2 word，依次运行
 `synth`、`dfflibmap`、`abc -fast -liberty`，写出结构网表，然后运行
-`scripts/upsize_fanout.py` 提升高扇出驱动的强度。该时序配置约 49.9k 个
-Nangate45 单元。`bash scripts/sta.sh` 随后报告 50 MHz pre-CTS 结果：setup
-+16.01 ns / hold +0.058 ns，TNS/WNS 0.00。完整签核必须用 SRAM 宏替换 TCM，并在 CTS
+`scripts/upsize_fanout.py` 提升高扇出驱动的强度。该时序配置约 97.0k 个
+Nangate45 单元。`bash scripts/sta.sh` 随后报告 100 MHz pre-CTS 结果：setup
++3.251 ns / hold +0.083 ns，TNS/WNS 0.00。完整签核必须用 SRAM 宏替换 TCM，并在 CTS
 后重新检查 hold。如果 Yosys 报告推断 latch、多驱动或 `$mem` 单元，请先修 RTL 或脚本。
 
 ## 8. cocotb 与 riscv-dv 套件
@@ -258,13 +266,14 @@ Nangate45 单元。`bash scripts/sta.sh` 随后报告 50 MHz pre-CTS 结果：se
   - `cocotb/soc`：总线协议、`ready` 拉低、背靠背访问、`bus_conflict`，以及
     timer/GPIO/UART/SPI 的寄存器、边界、随机测试和 reference model scoreboard。
   - `cocotb/core`：随机 ALU/M/访存/分支流、相关停顿、CSR/陷阱、中断时序、
-    除法冻结、TCM 写门控。
+    除法冻结、TCM 写门控、RVC 展开/控制流/trap、RV32A（AMO/LR/SC）。RV32F 的
+    语义由官方 146 项 F ISA 测试覆盖，cocotb 的 RV32Interp 不含浮点。
   - 详见 `docs/verification_cocotb.md`、`docs/verification_cocotb_core.md`。
 - `bash scripts/setup_riscv_dv.sh && bash scripts/run_riscv_dv.sh`
   - riscv-dv 生成 RV32IM 随机程序，在 RTL 与 Sail 0.16 之间逐条比对退休指令、
-    寄存器写、存储和陷阱记录；每次运行还固定执行一个定向陷阱镜像（非法指令、
-    未对齐访存、未对齐取指）。
+    寄存器写、存储和陷阱记录；每次运行还固定执行定向陷阱、RV32A 与 RV32C 镜像。
+    F 没有加入随机生成器或 lockstep 比较，由 ISA F 套件覆盖。
   - 详见 `docs/verification_riscv_dv.md`。
 
-当前基线：cocotb **72 + 64 项通过**；riscv-dv + Sail 默认 3 个种子加定向镜像
-**4/4 `COMPARE_PASS`**。
+当前基线：cocotb **72 + 77 项通过**；riscv-dv + Sail 默认 3 个种子加三个定向镜像
+**6/6 `COMPARE_PASS`**。

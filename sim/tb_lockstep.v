@@ -21,13 +21,16 @@
 // writes back in order, so MEM stores and WB retirements interleave exactly:
 //   I <pc> <ir> <rd> <wdata>   retired instruction (rd=0 for non-writes)
 //   S <addr> <pc> <ir> <data> <strb>   store executed by the instruction
+//                                      (AMO writes are not traced, matching
+//                                      Sail's --trace-mem)
 //   X <pc> <ir> <mcause> <mtval>       exception at EX (instruction not retired)
 // mcause/mtval are the EX-stage values (ex_exc_cause/ex_exc_tval); mepc is
 // not needed because the exception PC is on the X line.
 // All stores are word-sized (wstrb = f).
 //
-// Termination: the halt mailbox store, a fetch outside the ITCM/DTCM, or the
-// cycle limit.  ITCM/DTCM contents are preserved across bus waits, so an
+// Termination: retirement of the STOP_PC instruction (the fetch address is
+// formed word aligned, so a 2-mod-4 stop PC can never be produced by IF), the
+// halt mailbox store, a fetch outside the ITCM/DTCM, or the cycle limit.  ITCM/DTCM contents are preserved across bus waits, so an
 // access to unmapped space shows up as stale data and must fail the compare.
 
 module tb_lockstep;
@@ -140,14 +143,19 @@ module tb_lockstep;
         // WB receives a new instruction this edge when MEM is valid and the
         // pipeline does not hold it.  The flag makes each instruction appear
         // exactly once in the trace, even while a divider/bus stall freezes
-        // the pipeline.
-        wb_new_q <= (rstn && !done && !dut.pipe_freeze && dut.MEM_valid);
+        // the pipeline or an AMO occupies MEM for its two cycles.
+        wb_new_q <= (rstn && !done && !dut.pipe_freeze && dut.MEM_valid &&
+                     !(dut.MEM_amo_rmw && !dut.MEM_amo_phase));
     end
 
     always @(posedge clk) begin
         if (rstn && !done) begin
-            // one line per completed store
+            // One line per completed store.  Sail's --trace-mem does not log
+            // AMO writes, so they are omitted here too; a later load in the
+            // program observes the updated word and is compared through the
+            // retirement trace.
             if (dut.MEM_valid && dut.MEM_mem_write &&
+                    !dut.MEM_amo_rmw && (!dut.MEM_is_sc || dut.MEM_sc_ok) &&
                     (!dut.mem_bus_access || dut.bus_ready_i) && !dut.pipe_freeze) begin
                 if (dut.MEM_addr == halt_addr) begin
                     done <= 1'b1;

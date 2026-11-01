@@ -39,13 +39,10 @@ init:
                   lw x10, 0(x12)
                   li x12, 0x10000002
                   sw x10, 0(x12)
-                  .align 2
-                  la x13, target
-                  addi x13, x13, 2
-                  jalr x11, 0(x13)
-                  nop
-                  csrr x6, 0x342
-                  csrr x8, 0x343
+                  # IALIGN=16: a 2-mod-4 branch/jump target is legal, so the
+                  # old misaligned-fetch (cause 0) case no longer traps.  The
+                  # compressed illegal-instruction case is covered by
+                  # directed/compressed.S.
 target:
                   li x14, 0x1234
                   la x31, test_done
@@ -82,6 +79,6 @@ mtvec_handler:
                   sw x5, 0(x4)
                   sw x6, 4(x4)
                   sw x7, 8(x4)
-                  addi x6, x6, 4
+                  addi x6, x6, 4             # all instructions in this image are 4B
                   csrw 0x341, x6
                   mret

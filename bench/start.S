@@ -8,6 +8,10 @@
 _start:
     la      sp, _stack_top
 
+    /* Enable mstatus.FS so any float code can use the RV32F unit. */
+    li      t2, 0x2000
+    csrs    mstatus, t2
+
     la      t0, _sbss
     la      t1, _ebss
 1:  bgeu    t0, t1, 2f

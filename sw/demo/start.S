@@ -2,6 +2,8 @@
     .globl _start
 _start:
     li      sp, 0x00007FF0
+    li      t0, 0x2000
+    csrs    mstatus, t0
     call    main
 
     /* simulation halt mailbox (also a convenient reset loop) */

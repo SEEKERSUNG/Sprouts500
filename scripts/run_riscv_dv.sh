@@ -31,6 +31,7 @@ BUILD="$ROOT/build/riscv_dv"
 LOGS="$ROOT/logs/riscv_dv"
 TB="$ROOT/sim/tb_lockstep.v"
 CORE="$ROOT/rtl/core.v"
+FPU="$ROOT/rtl/fp_unit.v"
 INSTR_CNT="${INSTR_CNT:-200}"
 MAX_CYCLES="${MAX_CYCLES:-2000000}"
 PREFIX="${RISCV_PREFIX:-riscv64-unknown-elf-}"
@@ -61,16 +62,17 @@ done
 mkdir -p "$BUILD" "$LOGS"
 
 say "building Icarus lockstep testbench"
-"$IVERILOG" -g2012 -o "$BUILD/tb_lockstep.vvp" "$TB" "$CORE" \
+"$IVERILOG" -g2012 -o "$BUILD/tb_lockstep.vvp" "$TB" "$CORE" "$FPU" \
     > "$LOGS/iverilog.log" 2>&1 \
     || { cat "$LOGS/iverilog.log"; die "testbench compile failed"; }
 
 sym() { "$NM" "$1" | awk -v s="$2" '$3 == s { print $1; exit }'; }
 
-# image <name> <label> <asm> <stop-sym> <halt-sym>
+# image <name> <label> <asm> <stop-sym> <halt-sym> [march]
 #   link, load and run one image in both models, compare, print one result line
 image() {
     local name=$1 label=$2 asm_src=$3 stop_sym=$4 halt_sym=$5
+    local march=${6:-rv32im_zicsr}
     local b="$BUILD/$name"
     local l="$LOGS/$name.log"
     local stop halt stop_dec halt_dec rc
@@ -85,7 +87,7 @@ image() {
     # the same memory map (verif/riscv_dv/sail_rv32im.json: RAM at 0x0 and at
     # 0x10000000, no ROM/CLINT/HTIF), so every PC, register value and store
     # address is numerically identical in both models.
-    "$GCC" -march=rv32im_zicsr -mabi=ilp32 -nostdlib -nostartfiles -static \
+    "$GCC" -march="$march" -mabi=ilp32 -nostdlib -nostartfiles -static \
         -mno-relax -I "$b" -T "$VERIF/link_rtl.ld" "$asm_src" -o "$b/prog.elf" \
         > "$b/link.log" 2>&1 \
         || { L "FAIL link"; tail -n 20 "$b/link.log" | sed 's/^/    /' | tee -a "$l"; return 1; }
@@ -205,7 +207,21 @@ else
     res="FAIL"; fails=$((fails + 1))
 fi
 dir_line="$(grep -E 'COMPARE_PASS|^FAIL' "$LOGS/directed_trap.log" | tail -n 1)"
-printf 'directed %s  %s\n' "$res" "${dir_line}" | tee -a "$summary"
+printf 'directed trap %s  %s\n' "$res" "${dir_line}" | tee -a "$summary"
 total=$((total + 1))
+
+# Directed RV32A and RV32C images (the vendored random target emits only I/M).
+for d in "directed_amo:amo.S:rv32ia_zicsr" "directed_compressed:compressed.S:rv32ic_zicsr"; do
+    name=${d%%:*}; rest=${d#*:}; src=${rest%%:*}; march=${rest##*:}
+    rm -rf "$BUILD/$name" "$LOGS/$name.log"
+    if image "$name" "$name" "$VERIF/directed/$src" test_done halt_mailbox "$march"; then
+        res="PASS"
+    else
+        res="FAIL"; fails=$((fails + 1))
+    fi
+    line="$(grep -E 'COMPARE_PASS|^FAIL' "$LOGS/$name.log" | tail -n 1)"
+    printf '%s %s  %s\n' "$name" "$res" "$line" | tee -a "$summary"
+    total=$((total + 1))
+done
 printf '\nriscv-dv lockstep: %d/%d passed\n' $(( total - fails )) "$total" | tee -a "$summary"
 [ "$fails" -eq 0 ]

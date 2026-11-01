@@ -10,11 +10,11 @@
 module tb_soc;
     localparam ITCM_WORDS = 8192;
     localparam HALT_IDX   = 32'h7FFC >> 2;
-    localparam CLKS_PER_BIT = 434;      // 50 MHz / 115200
+    localparam CLKS_PER_BIT = 868;      // 100 MHz / 115200
 
     reg clk = 1'b0;
     reg rstn = 1'b0;
-    always #10 clk = ~clk;              // 50 MHz
+    always #5 clk = ~clk;               // 100 MHz
 
     wire [31:0] gpio_pin;
     wire uart_tx;

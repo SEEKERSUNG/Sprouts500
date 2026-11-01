@@ -86,7 +86,7 @@ async def test_spi_reset_values(dut):
     bm = await _setup(dut)
     assert (await bm.read(SPI_CTRL)).data == 0
     assert (await bm.read(SPI_STATUS)).data == 0
-    assert (await bm.read(SPI_CLKDIV)).data == 24
+    assert (await bm.read(SPI_CLKDIV)).data == 49
     assert (await bm.read(SPI_RXDATA)).data == 0
     assert (await bm.read(SPI_TXDATA)).data == 0        # write-only
     assert (await bm.read(SPI_CS)).data == 0
@@ -133,7 +133,7 @@ async def _first_bad_mode(dut, bm, tx, clk_div):
 # so rx_shift captures the value miso_s1 held *before* that edge, i.e. MOSI
 # from the previous bit.  With the two-clock MISO path (miso -> miso_s0 ->
 # miso_s1 -> rx_shift) CLKDIV >= 2 gives the sample enough time and behaves
-# correctly; CLKDIV <= 1 is off by one bit.  The reset value of CLKDIV is 24,
+# correctly; CLKDIV <= 1 is off by one bit.  The reset value of CLKDIV is 49,
 # so the bug is not visible in the default configuration.  Tests record the
 # observed behaviour; the RTL is not modified.
 @cocotb.test()

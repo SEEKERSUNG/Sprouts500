@@ -16,8 +16,8 @@ ebreak        cause 3, handler skips the instruction.
 illegal       cause 2, mtval = instruction word.
 mis_load      cause 4, mtval = address, destination not written.
 mis_store     cause 6, mtval = address, memory unchanged.
-mis_branch    taken branch with a 2-mod-4 target -> cause 0, mtval = target.
-mis_jalr      jalr target with bit 1 set -> cause 0, mtval = target & ~1.
+mis_amo       misaligned AMO.W -> cause 6, mtval = address, memory unchanged.
+amo_mmio      AMO.W to an MMIO address -> cause 7, no bus transaction.
 """
 
 import pathlib
@@ -31,7 +31,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from _helpers import (  # noqa: E402
-    DTCM_BASE, Asm, CoreHarness, enc_b, enc_i, expect, tb_case,
+    DTCM_BASE, Asm, CoreHarness, enc_amo, enc_b, enc_i, expect, tb_case,
 )
 from _runner import run_test  # noqa: E402
 
@@ -127,10 +127,10 @@ def build_csr_rw():
     exp = {
         "regs": {6: 0x1234_5678, 7: 0x1234_5678, 9: 0xFFFF_5678,
                  11: 0xF0F0_5070, 12: 0x01, 13: 0x1F, 14: 0x10, 15: 0x10,
-                 17: 0x1234_567C, 19: 0x2A, 21: 0xDEAD_BEEF,
-                 23: 0xCAFE_BABE, 25: 0x1888, 26: 0x4000_1100,
+                 17: 0x1234_567E, 19: 0x2A, 21: 0xDEAD_BEEF,
+                 23: 0xCAFE_BABE, 25: 0x1888, 26: 0x4000_1125,
                  27: 0x0, 28: 0x0, 29: 0x0},
-        "csrs": {"mscratch": 0x10, "mepc": 0x1234_567C, "mtvec": 0x2A,
+        "csrs": {"mscratch": 0x10, "mepc": 0x1234_567E, "mtvec": 0x2A,
                  "mcause": 0xDEAD_BEEF, "mtval": 0xCAFE_BABE,
                  "mstatus": 0x1888},
         "nonzero": (5, 16, 18, 20, 22, 24),
@@ -173,7 +173,9 @@ def build_ebreak():
         a.ebreak()
         return pc
 
-    return _common_trap_case(fault_emit, 3, 0)
+    # Breakpoint mtval is the breakpoint PC (spec-permitted and what the
+    # riscv-arch-test reference expects).
+    return _common_trap_case(fault_emit, 3, lambda pc: pc)
 
 
 def build_illegal():
@@ -216,35 +218,35 @@ def build_mis_store():
     return words, halt_pc, exp
 
 
-def build_mis_branch():
+def build_mis_amo():
+    def setup(a):
+        a.li(5, 0xDEAD_BEEF)
+        a.li(28, DTCM_BASE + 2)      # misaligned word address
+
     def fault_emit(a):
         pc = a.here()
-        a.raw(enc_b(0x63, 0, 0, 0, 6))   # beq x0,x0 -> pc+6 (2 mod 4)
+        a.raw(enc_amo(0x00000, 5, 28, 5))          # amoadd.w x5, x5, (x28)
         return pc
 
-    def tval(pc):
-        return pc + 6
-
-    words, halt_pc, exp = _common_trap_case(fault_emit, 0, tval)
-    exp["regs"][10] = 0x123                 # continued after the branch
+    words, halt_pc, exp = _common_trap_case(
+        fault_emit, 6, DTCM_BASE + 2, setup=setup, pre_regs={5: 0xDEAD_BEEF})
+    exp["dtcm"] = {0: 0x0000_0000}
     return words, halt_pc, exp
 
 
-def build_mis_jalr():
+def build_amo_mmio():
+    def setup(a):
+        a.li(5, 7)
+        a.li(28, 0x2000_0000)
+
     def fault_emit(a):
-        pc_au = a.here()
-        a.auipc(5, 0)
-        p_addi = a.here()
-        a.addi(5, 5, (p_addi + 18) - pc_au)  # x5 = p_addi + 18
         pc = a.here()
-        a.jalr(0, 5, 0)                       # target bit1 set -> misaligned
+        a.raw(enc_amo(0x00001, 5, 28, 5))          # amoswap.w x5, x5, (x28)
         return pc
 
-    def tval(pc):
-        return pc + 14                        # p_addi+18 where pc=p_addi+4
-
-    words, halt_pc, exp = _common_trap_case(fault_emit, 0, tval)
-    exp["regs"][10] = 0x123
+    words, halt_pc, exp = _common_trap_case(
+        fault_emit, 7, 0x2000_0000, setup=setup, pre_regs={5: 7})
+    exp["bus_transactions"] = 0
     return words, halt_pc, exp
 
 
@@ -256,8 +258,8 @@ BUILDERS = {
     "illegal": build_illegal,
     "mis_load": build_mis_load,
     "mis_store": build_mis_store,
-    "mis_branch": build_mis_branch,
-    "mis_jalr": build_mis_jalr,
+    "mis_amo": build_mis_amo,
+    "amo_mmio": build_amo_mmio,
 }
 
 

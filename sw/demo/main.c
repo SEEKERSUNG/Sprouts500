@@ -30,7 +30,7 @@
 
 static void uart_init(void)
 {
-    UART_BAUD = 433;       /* 50 MHz / 115200 - 1 */
+    UART_BAUD = 867;       /* 100 MHz / 115200 - 1 */
     UART_CTRL = 0x1;       /* TX enable */
 }
 
@@ -115,7 +115,7 @@ int main(void)
     /* timer interrupt test: take three periodic interrupts */
     irq_count = 0;
     csrw_mtvec((unsigned)trap_entry);
-    TIMER_CMP  = 5000;
+    TIMER_CMP  = 10000;    /* ~100 us at 100 MHz */
     TIMER_CTRL = 0x0f;      /* enable, irq, clear pending, periodic */
     csrs_mie(0x80);         /* MTIE */
     csrs_mstatus(0x8);      /* MIE */

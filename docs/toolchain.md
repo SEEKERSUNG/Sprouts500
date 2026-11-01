@@ -48,13 +48,31 @@ source scripts/env.sh
 `PYTHON`（默认 `python3`），并把 `OPENSTA_HOME`（默认 `/opt/opensta`）的 `bin`
 加入 PATH。
 
+## 2.1 ISA 字符串
+
+core 是 RV32IMACF + Zicsr；默认脚本用 `rv32imacf_zicsr -mabi=ilp32`：F 寄存器/指令
+可用，参数仍走整数寄存器的软浮点 ABI（浮点表达式由 GCC 生成 F 指令，结果经
+fmv 往返）。
+各脚本默认的 `-march`：
+
+| 脚本 | 默认 `-march` | 说明 |
+|---|---|---|
+| `run_isa.py` | I=`rv32i`、M=`rv32im`、C=`rv32ic_zicsr`、A=`rv32ia_zicsr`、F=`rv32if_zicsr`（另加 `-DFLEN=32`） | 每个套件用对应 ISA 编译（arch-test 源码里明确写了 `RVTEST_ISA`） |
+| `build_demo.sh`、`build_app.sh`、`build_bench.sh` | `rv32imacf_zicsr` | 可用 `MARCH=...` 覆盖，例如 A/B 对比 `MARCH=rv32im_zicsr` |
+| `run_riscv_dv.sh` | 随机种子 `rv32im_zicsr`；定向 A `rv32ia_zicsr`、定向 C `rv32ic_zicsr` | 随机生成器的 `rv32imc` target 只支持 I/M |
+| `run_cocotb.sh` | 不涉及编译器；指令由 Python 编码器生成 | — |
+
+Sail（`verif/riscv_dv/sail_rv32im.json`）启用了 M/A/C（`Zca`）；RTL 还支持 Zcf
+（压缩浮点 load/store）和 RV32F，但 Sail 配置未启用 Zcf/F，lockstep 也不比较浮点：
+RV32F 语义由 146 项 ISA F 测试覆盖，Zcf 由 `sw/example` 的 C 浮点测试覆盖。
+
 ## 3. Icarus Verilog
 
 testbench 使用 Verilog-2012 特性（`$value$plusargs`、`$test$plusargs`、层次化存储器
 `$readmemh`、`join_any`、`disable fork`）。始终使用 `-g2012`：
 
 ```bash
-iverilog -g2012 -o build/tb_core.vvp sim/tb_core.v rtl/core.v
+iverilog -g2012 -o build/tb_core.vvp sim/tb_core.v rtl/core.v rtl/fp_unit.v
 vvp build/tb_core.vvp +ITCM_HEX=... +SIG_ADDR=... +SIG_LEN=... +REF_FILE=...
 ```
 
@@ -66,7 +84,7 @@ Icarus 支持把 `$readmemh` 读入子模块数组（`dut.ITCM`），ISA testben
 `scripts/synth.sh`：
 
 ```
-read_verilog rtl/core.v
+read_verilog rtl/fp_unit.v rtl/core.v
 chparam -set ITCM_WORDS 2 -set DTCM_WORDS 2 core
 synth -top core -flatten
 dfflibmap -liberty lib/NangateOpenCellLibrary_typical.lib
@@ -79,7 +97,8 @@ python3 scripts/upsize_fanout.py build/syn/core_netlist.v 40
 TCM 是推断寄存器阵列；CPU 时序运行时缩为 2 word。真实 ASIC/FPGA 签核时，请替换为
 SRAM/BRAM 宏和 Liberty 模型。`abc -fast` 用映射质量换运行时间；
 `scripts/upsize_fanout.py` 提升高扇出扁平多路选择/使能驱动的强度（一阶 pre-CTS 修正；
-正式流程应使用 resizer + CTS 替代）。该时序配置在提升前约 49.9k 个 Nangate45 单元（约 66.7k µm²）。
+正式流程应使用 resizer + CTS 替代）。该时序配置（ABC 后）约 97.0k 个 Nangate45 单元（含分级流水 FPU）；
+面积报告见 `logs/syn/yosys.log`。
 
 如果你的 Yosys 版本需要单独的 `abc` 可执行文件，安装发行版软件包；Ubuntu 软件包会
 同时提供 `yosys-abc` 和 `yosys`。
@@ -140,7 +159,7 @@ bash scripts/sta.sh
 - 强制重建：`sudo OPENSTA_REBUILD=1 bash scripts/setup_opensta.sh`。
 - 覆盖仓库 URL/下载前缀时用 `sudo -E` 保留 `OPENSTA_GIT`/`GH_RAW_MIRROR` 环境变量。
 
-已验证结果：OpenSTA 3.1.0，50 MHz pre-CTS，setup +16.01 ns，hold +0.058 ns，
+已验证结果：OpenSTA 3.1.0，100 MHz pre-CTS，setup +3.251 ns，hold +0.083 ns，
 TNS/WNS 0.00。时钟为理想时钟（无 CTS）；CTS 后需重新检查 hold。
 
 ### 手动构建 OpenSTA（备用）
@@ -176,8 +195,8 @@ set_output_delay 2.0 -clock clk [all_outputs]
 set_load 0.05 [all_outputs]
 ```
 
-目标为 50 MHz，setup uncertainty 0.5 ns，hold uncertainty 0 ns（理想时钟，无 CTS），
-板级/IO 延迟 2 ns。当前 pre-CTS 结果：setup slack +16.01 ns，hold slack +0.058 ns，
+目标为 100 MHz，setup uncertainty 0.5 ns，hold uncertainty 0 ns（理想时钟，无 CTS），
+板级/IO 延迟 2 ns。当前 pre-CTS 结果：setup slack +3.251 ns，hold slack +0.083 ns，
 TNS/WNS 0.00。CTS 后重新跑 hold 签核；按目标频率调整周期。
 
 ## 8. 常见问题
