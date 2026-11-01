@@ -86,7 +86,7 @@ SRAM/BRAM 宏和 Liberty 模型。`abc -fast` 用映射质量换运行时间；
 
 ## 5. Nangate45 Liberty
 
-`lib/NangateOpenCellLibrary_typical.lib` 已 vendored。重新抓取：
+`lib/NangateOpenCellLibrary_typical.lib` 不随仓库分发（已 gitignore）；本地自备或重新抓取：
 
 ```bash
 bash scripts/fetch_lib.sh
@@ -198,5 +198,5 @@ TNS/WNS 0.00。CTS 后重新跑 hold 签核；按目标频率调整周期。
 - 项目内不再保留 `tools/` 目录；OpenSTA/CUDD 现在安装在 `/opt/opensta`，可用
   `scripts/setup_opensta.sh` 重建。
 - 不要复制 `build/` 或 `logs/`；重新生成。
-- `tests/isa/` 和 `lib/` 已 vendored，离线机器也能跑回归。
+- `tests/isa/` 已 vendored；Nangate45 Liberty 需本地自备，不随仓库分发。
 - 脚本使用 LF 换行；检出时请保留。

@@ -44,5 +44,6 @@ bash scripts/sta.sh             # 期望 50 MHz 下 setup/hold MET
   `EX_funct3[1]` 除法结果选择，或前递/预测的排除条件（load 不前递、计数器饱和、
   `IF_pred_*_q` 配对）。原因见 `CLAUDE.md`。
 - `tests/isa/env/arch_test.h` 包含本地 `la x0` 兼容补丁；保留它。
-- `tests/isa/` 与 `lib/` 已 vendored；`build/`、`logs/` 被忽略。
+- `tests/isa/` 已 vendored；`lib/` 中的 Nangate45 Liberty 仅本地使用（已 gitignore）；
+  `build/`、`logs/` 被忽略。
 - OpenSTA/CUDD 系统安装在 `/opt/opensta`，命令为 `/usr/local/bin/sta`。

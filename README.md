@@ -49,7 +49,7 @@ bash scripts/setup_riscv_dv.sh     # 一次性：.venv-dv + Sail 0.16
 bash scripts/run_riscv_dv.sh       # riscv-dv + Sail lockstep
 
 # 7. 综合 + 时序
-bash scripts/fetch_lib.sh          # Nangate45 Liberty（lib/ 中已附带）
+bash scripts/fetch_lib.sh          # Nangate45 Liberty（仅本地，不随仓库分发）
 bash scripts/synth.sh              # 生成 build/syn/core_netlist.v
 sudo bash scripts/setup_opensta.sh # 一次性安装 CUDD + OpenSTA 到 /opt/opensta
 bash scripts/sta.sh                # 50 MHz STA 报告
@@ -97,7 +97,7 @@ cocotb/          cocotb 验证：soc/（总线+外设）、core/（微架构）�
 verif/riscv_dv/  riscv-dv 生成器（vendored）与 lockstep 比对脚本
 scripts/         安装/抓取/构建/运行/综合/STA 脚本
 tests/isa/       官方 ISA 测试源码 + 参考签名
-lib/             Nangate45 Liberty
+lib/             本地 Nangate45 Liberty（不提交）
 constraints/     SDC
 docs/            架构、验证、寄存器、工具链、路线图、benchmark
 archive/         原始 core
@@ -255,7 +255,9 @@ Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是�
 ## 仓库说明
 
 - `build/`、`logs/` 已被忽略。OpenSTA/CUDD 安装在系统目录 `/opt/opensta`，不在仓库内。
-- `tests/isa/` 与 `lib/` 已 vendored，保证离线可复现验证。
+- `tests/isa/` 已 vendored，保证离线可复现验证。
+- `lib/NangateOpenCellLibrary_typical.lib` 仅供本地综合/STA，不随仓库分发（已加入
+  `.gitignore`）；可用 `bash scripts/fetch_lib.sh` 自行下载或放置本地副本。
 - 项目目标环境为 Ubuntu 24.04/26.04，使用 `gcc-riscv64-unknown-elf`、
   Icarus Verilog 12+、Yosys 和 OpenSTA。已验证环境为 Ubuntu 26.04。
 

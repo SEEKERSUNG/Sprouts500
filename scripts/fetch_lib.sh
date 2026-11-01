@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Fetch the Nangate45 Liberty for local synthesis/STA only.  The file is
+# proprietary (see its header) and is deliberately not redistributed in git.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/env.sh"
