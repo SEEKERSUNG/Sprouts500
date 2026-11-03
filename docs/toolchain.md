@@ -97,7 +97,7 @@ python3 scripts/upsize_fanout.py build/syn/core_netlist.v 40
 TCM 是推断寄存器阵列；CPU 时序运行时缩为 2 word。真实 ASIC/FPGA 签核时，请替换为
 SRAM/BRAM 宏和 Liberty 模型。`abc -fast` 用映射质量换运行时间；
 `scripts/upsize_fanout.py` 提升高扇出扁平多路选择/使能驱动的强度（一阶 pre-CTS 修正；
-正式流程应使用 resizer + CTS 替代）。当前该时序配置（ABC 后）为 99,875 个 Nangate45
+正式流程应使用 resizer + CTS 替代）。当前该时序配置（ABC 后）为 97,225 个 Nangate45
 单元（含分级流水 FPU、BTB 和 4 项 RAS）；
 面积报告见 `logs/syn/yosys.log`。
 
@@ -165,7 +165,7 @@ bash scripts/sta.sh
 - 强制重建：`sudo OPENSTA_REBUILD=1 bash scripts/setup_opensta.sh`。
 - 覆盖仓库 URL/下载前缀时用 `sudo -E` 保留 `OPENSTA_GIT`/`GH_RAW_MIRROR` 环境变量。
 
-已验证结果：OpenSTA 3.1.0，100 MHz pre-CTS，setup +3.241 ns，hold +0.083 ns，
+已验证结果：OpenSTA 3.1.0，100 MHz pre-CTS，setup +3.148 ns，hold +0.083 ns，
 TNS/WNS 0.00。时钟为理想时钟（无 CTS）；CTS 后需重新检查 hold。
 
 ### 手动构建 OpenSTA（备用）
@@ -202,7 +202,7 @@ set_load 0.05 [all_outputs]
 ```
 
 目标为 100 MHz，setup uncertainty 0.5 ns，hold uncertainty 0 ns（理想时钟，无 CTS），
-板级/IO 延迟 2 ns。当前 pre-CTS 结果：setup slack +3.241 ns，hold slack +0.083 ns，
+板级/IO 延迟 2 ns。当前 pre-CTS 结果：setup slack +3.148 ns，hold slack +0.083 ns，
 TNS/WNS 0.00。CTS 后重新跑 hold 签核；按目标频率调整周期。
 
 ## 8. 常见问题

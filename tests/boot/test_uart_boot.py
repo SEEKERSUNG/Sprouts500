@@ -4,6 +4,7 @@
 import importlib.util
 import struct
 import unittest
+from unittest import mock
 import zlib
 from pathlib import Path
 
@@ -40,6 +41,55 @@ class UartBootTests(unittest.TestCase):
         frame[-1] ^= 0x80
         with self.assertRaisesRegex(uart_boot.BootError, "CRC"):
             uart_boot.parse_frame(frame)
+
+    def test_permanent_status_is_not_retried(self):
+        class FakeSerial:
+            def __init__(self):
+                self.writes = 0
+                self.buf = bytearray()
+
+            def write(self, data):
+                self.writes += 1
+                # INFO response with a permanent status; the sequence is the
+                # request's fourth byte.
+                payload = struct.pack("<I", 2)
+                self.buf += uart_boot.make_frame(0x81, data[3], 0, payload)
+
+            def read_byte(self, deadline):
+                if not self.buf:
+                    raise uart_boot.BootError("timeout")
+                return self.buf.pop(0)
+
+            def close(self):
+                pass
+
+        fake = FakeSerial()
+        with mock.patch.object(uart_boot, "SerialPort", lambda port: fake):
+            loader = uart_boot.Bootloader("/dev/null", retries=3)
+            with self.assertRaises(uart_boot.BootStatusError):
+                loader.request(uart_boot.CMD_INFO)
+        self.assertEqual(fake.writes, 1)
+
+    def test_transient_timeout_retries_three_times(self):
+        class FakeSerial:
+            def __init__(self):
+                self.writes = 0
+
+            def write(self, data):
+                self.writes += 1
+
+            def read_byte(self, deadline):
+                raise uart_boot.BootError("timeout")
+
+            def close(self):
+                pass
+
+        fake = FakeSerial()
+        with mock.patch.object(uart_boot, "SerialPort", lambda port: fake):
+            loader = uart_boot.Bootloader("/dev/null", retries=3)
+            with self.assertRaisesRegex(uart_boot.BootError, "failed after retries"):
+                loader.request(uart_boot.CMD_INFO)
+        self.assertEqual(fake.writes, 4)
 
     def test_bad_lengths_are_rejected(self):
         frame = bytearray(uart_boot.make_frame(2, 1, 0x810, b"abc"))

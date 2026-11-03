@@ -15,10 +15,10 @@
 | ISA 测试 | RV32I 38 + RV32M 8 + RV32C 27（`riscv-arch-test` 2.x）**73/73**；RV32A 定向 3/3；RV32F 146/146；合计 **222/222**（Ubuntu 26.04，GCC 14.2，Icarus 12） |
 | SoC demo：UART hello + 定时器中断 + GPIO | 通过（Ubuntu 26.04） |
 | FPGA UART Bootloader | 2 KiB 驻留 Boot、低有效 BOOT0（GPIO[0]）、分帧/CRC32 下载；协议单测 + 端到端仿真 `BOOT_TEST_PASS` |
-| cocotb 随机/定向验证 | SoC/外设 72 项 + core 微架构 78 项（含 RVC、RV32A、RV32F 集成），全部通过 |
+| cocotb 随机/定向验证 | SoC/外设 72 项 + core 微架构 79 项（含 RVC、RV32A、RV32F 集成），全部通过 |
 | riscv-dv + Sail 指令级随机 | 3 个 RV32IM 随机种子 + 定向陷阱 + 定向 A + 定向 C lockstep，6/6 通过 |
 | Yosys + Nangate45 门级综合 | Yosys 0.52，ABC `-fast`，2-word TCM 时序配置 + 驱动强度提升 |
-| OpenSTA 时序 | **100 MHz pre-CTS MET**：setup +3.241 ns，hold +0.083 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟，99,875 单元） |
+| OpenSTA 时序 | **100 MHz pre-CTS MET**：setup +3.148 ns，hold +0.083 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟，97,225 单元） |
 | CoreMark 1.0 | best（RV32IMACF，benchmark 不含浮点，GCC 13.2）**308.175**（**3.08 CoreMark/MHz**，324,490 周期，100 MHz）；RV32IM 历史基线 284.3（351,767 周期） |
 | Dhrystone 2.1 | ground **135,660 Dhrystones/s**（**77.2 DMIPS**，0.772 DMIPS/MHz，GCC 14.2 参考）；best **262,387 Dhrystones/s**（**149.3 DMIPS**，**1.493 DMIPS/MHz**，GCC 13.2） |
 
@@ -278,8 +278,8 @@ Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是�
   寄存器阵列，而不是编译好的 SRAM 宏。这样既保留有代表性的 CPU 逻辑和除法器，又避免
   产生数百万个推断 FF。完整签核请使用存储器编译器与 Liberty RAM 模型。
 - `constraints/core.sdc` 目标为 10 ns 时钟（100 MHz）、2 ns I/O 延迟、0.05 pF 负载。
-- 当前 pre-CTS 结果（OpenSTA 3.1.0，理想时钟）：setup +3.241 ns，hold +0.083 ns，
-  TNS/WNS 0.00，共 99,875 个 Nangate45 单元。CTS 后以及换用 SRAM 宏模型后需重新检查 hold。
+- 当前 pre-CTS 结果（OpenSTA 3.1.0，理想时钟）：setup +3.148 ns，hold +0.083 ns，
+  TNS/WNS 0.00，共 97,225 个 Nangate45 单元。CTS 后以及换用 SRAM 宏模型后需重新检查 hold。
 - `scripts/setup_opensta.sh` 按 OpenSTA 官方 Ubuntu Dockerfile 的流程，在 `/opt/opensta`
   下从源码构建 CUDD 3.0.0 和 OpenSTA，安装为 `/opt/opensta/bin/sta` 和
   `/usr/local/bin/sta`。登录 shell 通过 `/etc/profile.d/opensta.sh` 把

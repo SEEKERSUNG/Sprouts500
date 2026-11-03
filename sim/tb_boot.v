@@ -231,13 +231,15 @@ module tb_boot;
     integer image_len;
     integer cycles = 0;
     integer i, j, offset, chunk, found;
+    integer tmo;
+    reg [31:0] saved_crc_word;
     reg [31:0] saved_boot_word, actual_word, expected_crc;
     integer banner_start;
 
     always @(posedge clk) begin
         if (rstn) begin
             cycles <= cycles + 1;
-            if (cycles > 1000000) begin
+            if (cycles > 2000000) begin
                 $display("BOOT_TEST_FAIL global timeout pc=%08x", dut.u_soc.u_core.IF_PC);
                 $finish;
             end
@@ -308,6 +310,9 @@ module tb_boot;
         for (i = 0; i < 4; i = i + 1) tx_payload[i] = i;
         call_boot(8'h02, 8'h02, APP_ENTRY, 4, 4, 1, 1);
         call_boot(8'h02, 8'h03, 0, 4, 4, 2, 0);
+        for (j = 0; j < 32; j = j + 1) tx_payload[j] = 0;
+        call_boot(8'h02, 8'h7a, 32'h0000_7ff0, 1, 4, 2, 0);
+        call_boot(8'h02, 8'h7b, 32'hffff_fff0, 32, 4, 2, 0);
         call_boot(8'h55, 8'h04, 0, 0, 4, 3, 0);
 
         // Invalidate first, write unaligned chunks, then commit the header.
@@ -361,6 +366,34 @@ module tb_boot;
             $display("BOOT_ERROR application UART output missing");
             errors = errors + 1;
         end
+
+        // BOOT0 high with a corrupted stored image CRC must not run the stale
+        // application; it must fall into the downloader instead.
+        dut.u_soc.u_core.ITCM[HALT_IDX] = 0;
+        dut.u_soc.u_core.ITCM[RESULT_IDX] = 32'hffff_ffff;
+        saved_crc_word = dut.u_soc.u_core.ITCM[(APP_HEADER + 12) >> 2];
+        dut.u_soc.u_core.ITCM[(APP_HEADER + 12) >> 2] = saved_crc_word ^ 32'h1;
+        banner_start = rx_count;
+        rstn = 1'b0;
+        boot0 = 1'b1;
+        repeat (16) @(posedge clk);
+        rstn = 1'b1;
+        tmo = 0;
+        while ((rx_count < banner_start + 10) && (tmo < 100000)) begin
+            @(posedge clk);
+            tmo = tmo + 1;
+        end
+        if ((rx_count < banner_start + 10) ||
+            ({rx_buf[banner_start], rx_buf[banner_start+1],
+              rx_buf[banner_start+2], rx_buf[banner_start+3]} !== "S500")) begin
+            $display("BOOT_ERROR invalid image did not enter downloader");
+            errors = errors + 1;
+        end
+        if (dut.u_soc.u_core.ITCM[HALT_IDX] !== 0) begin
+            $display("BOOT_ERROR invalid image was executed");
+            errors = errors + 1;
+        end
+        dut.u_soc.u_core.ITCM[(APP_HEADER + 12) >> 2] = saved_crc_word;
 
         // Normal reset with BOOT0 high must verify and run the retained image.
         dut.u_soc.u_core.ITCM[HALT_IDX] = 0;

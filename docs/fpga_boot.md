@@ -40,7 +40,7 @@ MARCH=rv32imafc_zicsr bash scripts/build_fpga_app.sh sw/example
 # build/fpga/app/{app.elf,app.bin,app.hex,app.pkg}
 ```
 
-命令显式使用 `MARCH=rv32imafc_zicsr`，与默认 `rv32imacf_zicsr` 是相同的 ISA 集合，
+命令显式使用 `MARCH=rv32imafc_zicsr`，与默认 `rv32imafc_zicsr` 是相同的 ISA 集合，
 同时兼容对扩展顺序要求较严格的本机 GCC 13.2。也可通过 `MARCH` 覆盖其他目标配置；
 Bootloader 自身的 `BOOT_MARCH` 默认已是规范顺序，不需要额外设置。
 
@@ -61,7 +61,7 @@ python3 scripts/uart_boot.py --port /dev/ttyUSB0 \
 ```
 
 脚本只使用 Python 标准库和 Linux `termios`，默认 115200 8N1、无硬件流控。每包等待 ACK，
-失败自动重试 3 次。若 Bootloader 已提前打印过 banner 也没关系，脚本用 `INFO` 命令同步，
+首次尝试后最多重试 3 次；地址/命令/帧格式/无有效应用等永久状态不重试。若 Bootloader 已提前打印过 banner 也没关系，脚本用 `INFO` 命令同步，
 不依赖读到 banner。
 
 `app.pkg` 是 `16 字节头 + app.bin`，用于预载、打包和仿真；UART 下载脚本内部也会生成同样的
@@ -111,7 +111,8 @@ CRC 是常见的反射 CRC-32（polynomial `0xEDB88320`，初值/最终异或
 5. `RUN`。
 
 Bootloader 拒绝任何低于 `0x800`、超过 mailbox 前边界或发生地址回绕的写入。硬件写保护
-是第二道防线，即使已启动的应用尝试写 Boot 代码也不会生效。
+是第二道防线，即使已启动的应用尝试写 Boot 代码也不会生效；对保护区的 SC.W 返回
+失败，AMO 写被忽略。
 
 ## 4. 验证
 
@@ -122,11 +123,13 @@ MARCH=rv32imafc_zicsr bash scripts/test_boot.sh
 
 该脚本运行：
 
-- 主机打包/CRC/帧解析的 5 项标准库单元测试；
+- 主机打包/CRC/帧解析的 7 项标准库单元测试；
 - Boot 和应用的真实编译及尺寸检查；
 - `sim/tb_boot.v` 端到端仿真，通过真实 UART RTL 发送/接收所有帧；
 - INFO、CRC 错误、越界写、未知命令、非 word 对齐分块、VERIFY、RUN；
-- 下载后逐字节比较 ITCM，应用尝试写 Boot 区并确认被拒绝；
+- 下载后逐字节比较 ITCM；
+- 应用尝试写 Boot 区首字、末尾 word/byte；保护区内的 SC 必须失败，AMO 不得改变内存；
+- 损坏存储镜像 CRC 后，BOOT0 高时不得执行旧应用，而是回到下载器；
 - 下载后应用 UART 输出及 mailbox；
 - BOOT0 高时普通复位自动启动，BOOT0 低时强制返回下载器。
 

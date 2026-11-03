@@ -17,8 +17,8 @@
 - 官方 `riscv-arch-test` 2.x RV32I/M/C：73/73 通过；项目自带 A 定向测试 3/3。
   官方 F 套件 146/146。合计 ISA 222/222。
 - 裸机 SoC demo：UART hello、GPIO、三次定时器中断。
-- cocotb 套件：SoC/外设 72 项 + core 微架构 78 项（含 RVC 6 项、A 4 项、F 3 项、
-  RAS 定向 1 项），含随机与定向测试；F 不在 RV32Interp 中，由 146 项 ISA F 测试覆盖。
+- cocotb 套件：SoC/外设 72 项 + core 微架构 79 项（含 RVC 6 项、A 4 项、F 3 项、
+  RAS 定向 1 项、TCM 合并 1 项），含随机与定向测试；F 不在 RV32Interp 中，由 146 项 ISA F 测试覆盖。
 - riscv-dv + Sail 指令级随机 lockstep 验证（3 个随机种子 + 定向陷阱 + 定向 A +
   定向 C，6/6）。随机生成器仍只产生 I/M；C/A 由定向镜像覆盖，F 由 ISA 套件覆盖。
 - benchmark：CoreMark best（RV32IMACF）与 Dhrystone ground/best，

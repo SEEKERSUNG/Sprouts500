@@ -284,10 +284,11 @@ mul_uu = zero_ext(rs1) * zero_ext(rs2)
   load 在 EX->MEM 边沿捕获数据；同拍更老 MEM store 写同 word 时按字节合并。
 - 写按字节：`if (mem_wstrb_eff[i]) mem[index][i*8 +: 8] <= mem_wdata_eff[...]`。
 - TCM 写由 `!pipe_freeze` 门控，因此冻结的 MEM 级不会重复写入同一 store。
-- 可选 `ITCM_INIT_FILE` 用于 FPGA 初始化驻留 Boot 镜像，默认空字符串仍由 testbench
-  加载；可选 `ITCM_BOOT_BYTES` 忽略低地址 Boot 区写，默认 0 不保护。该写门控同时作用于
-  同拍 store/load 合并，被拒绝的写不能经 MEM 前递变得可见。完整 UART Boot 布局见
-  `docs/fpga_boot.md`。
+- 可选 `ITCM_INIT_FILE` 用于 FPGA 初始化驻留 Boot 镜像：非空时先把 ITCM 清 0 再装载，
+  默认空字符串仍由 testbench 加载。可选 `ITCM_BOOT_BYTES` 忽略低地址 Boot 区普通
+  store/AMO 写，默认 0 不保护；保护区内的 SC 在 EX 直接返回失败，不能假装提交。该写
+  门控同时作用于同拍 store/load 合并，被拒绝的写不能经 MEM 前递变得可见。完整 UART
+  Boot 布局见 `docs/fpga_boot.md`。
 
 ### 6.1.1 RV32A：两周期读改写与 LR/SC 保留
 
@@ -448,9 +449,10 @@ PC <= mepc
     中更老操作。陷阱/`mret` 清空 RAS，错误预测仍走统一 EX 重定向。
 30. 普通 TCM load 的数据在 EX->MEM 边沿捕获；同拍更老 store 必须按字节合并，WB 保存
     本 load 的原始 word。不要把该 MEM 前递扩展到总线 load 或 AMO/LR/SC。
-31. `ITCM_BOOT_BYTES` 的写保护必须同时门控真实数组写和同拍 store/load 合并；默认 0
-    才能保持普通 ISA/应用自修改 ITCM 的行为。FPGA 初始化文件默认空，不能取代 testbench
-    的显式 `$readmemh`。
+31. `ITCM_BOOT_BYTES` 的写保护必须同时门控真实数组写和同拍 store/load 合并；保护区
+    内的 SC 必须返回失败，AMO 写必须被忽略。默认 0 才能保持普通 ISA/应用自修改 ITCM
+    的行为。FPGA 初始化文件非空时先清 0 再装载，默认空不能取代 testbench 的显式
+    `$readmemh`。
 
 ## 10. 复位
 

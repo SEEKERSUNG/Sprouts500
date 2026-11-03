@@ -77,10 +77,16 @@ module core #(
 
     // FPGA configurations can initialize a resident UART bootloader directly
     // from the bitstream.  The empty default leaves all existing simulators in
-    // charge of loading ITCM through their testbenches.
+    // charge of loading ITCM through their testbenches.  FPGA block RAM powers
+    // up zeroed, so mirror that in simulation before loading the image; an
+    // absent application header must compare as zero, not X, on the first boot.
+    integer i_itcm_init;
     initial begin
-        if (ITCM_INIT_FILE != "")
+        if (ITCM_INIT_FILE != "") begin
+            for (i_itcm_init = 0; i_itcm_init < ITCM_WORDS; i_itcm_init = i_itcm_init + 1)
+                ITCM[i_itcm_init] = 32'b0;
             $readmemh(ITCM_INIT_FILE, ITCM);
+        end
     end
 
     reg [31:0] if_rdata_q;
@@ -1459,7 +1465,12 @@ module core #(
     wire [31:0] resv_eff_addr = mem_lr_commit ? {MEM_addr[31:2], 2'b00} :
                                 lr_resv_addr;
     wire ex_sc_conflict = mem_commit_store && ({MEM_addr[31:2], 2'b00} == ex_word);
-    wire ex_sc_ok = EX_amo && EX_is_sc && resv_eff_valid &&
+    // The boot region is read-only to the application.  A normal store is
+    // dropped by mem_itcm_we below, but SC must also report failure instead of
+    // claiming a commit whose data never reached the array.
+    wire ex_boot_protected = (EX_addr[31:28] == 4'h0) && (ITCM_BOOT_BYTES != 0) &&
+                             (EX_addr < ITCM_BOOT_BYTES);
+    wire ex_sc_ok = EX_amo && EX_is_sc && !ex_boot_protected && resv_eff_valid &&
                     (resv_eff_addr == ex_word) && !ex_sc_conflict;
 
     // Interrupts and exceptions wait for an in-flight FDIV/FSQRT so the unit's
@@ -1712,8 +1723,13 @@ module core #(
     // instruction and the following word, so lane-1 32-bit instructions need
     // no assembly bubble.  if_hold keeps IF_PC equal to the needed word.
     always @(posedge clk) begin
-        if_rdata_q       <= ITCM[IF_PC[ITCM_AW+1:2]];
-        if_rdata_hi_q    <= ITCM[IF_PC[ITCM_AW+1:2] + 1'b1];
+        if (!rstn) begin
+            if_rdata_q    <= 32'b0;
+            if_rdata_hi_q <= 32'b0;
+        end else begin
+            if_rdata_q    <= ITCM[IF_PC[ITCM_AW+1:2]];
+            if_rdata_hi_q <= ITCM[IF_PC[ITCM_AW+1:2] + 1'b1];
+        end
         // Read the EX address so the word is usable during the MEM cycle.
         // If an older store commits at this same edge, merge its byte lanes:
         // an inferred array would otherwise return the pre-store word.
@@ -1810,7 +1826,6 @@ module core #(
     always @(posedge clk) begin
         if (!rstn) begin
             IF_PC_q <= RESET_PC;
-            if_rdata_hi_q <= 32'b0;
             IF_pred_taken_q  <= 1'b0;
             IF_pred_target_q <= 32'b0;
         end else if (redirect) begin

@@ -6,11 +6,17 @@ source "$ROOT/scripts/env.sh"
 
 OUT="$ROOT/build/fpga/boot"
 mkdir -p "$OUT"
-MARCH="${BOOT_MARCH:-rv32imc_zicsr_zifencei}"
+BOOT_MARCH="${BOOT_MARCH:-${MARCH:-rv32imc_zicsr}}"
+# start.S uses fence.i; make sure the derived ISA string names Zifencei even
+# when a caller supplies a broader MARCH for the application.
+case "$BOOT_MARCH" in
+    *zifencei*) ;;
+    *) BOOT_MARCH="${BOOT_MARCH}_zifencei" ;;
+esac
 # GCC 13 otherwise diagnoses constant absolute MMIO pointers as zero-size arrays.
 
 "${RISCV_PREFIX}gcc" \
-    -march="$MARCH" -mabi=ilp32 \
+    -march="$BOOT_MARCH" -mabi=ilp32 \
     -mcmodel=medany -msmall-data-limit=0 \
     -Os -g -Wall -Wextra -Wno-array-bounds -ffreestanding -fno-common -fno-builtin \
     -nostdlib -nostartfiles \

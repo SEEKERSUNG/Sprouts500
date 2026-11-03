@@ -287,6 +287,17 @@ module fp_unit (
         fma_go = 1'b0; fma_p64 = 64'd0; fma_c64 = 64'd0;
         fma_base = 16'sd0; fma_sp = 1'b0; fma_sc = 1'b0;
         iter_go = 1'b0; iter_sqrt = 1'b0;
+        // Scratch values are consumed only on the paths that assign them, but
+        // a default keeps this combinational block latch-free for synthesis.
+        yy = 32'd0; sx_v = 32'd0; sy_v = 32'd0;
+        sxa = 1'b0; sya = 1'b0; sbig = 1'b0;
+        mag32 = 32'd0; sbg = 32'd0; ssm = 32'd0; sum33 = 33'd0;
+        er = 16'sd0; lz6 = 6'd0; prod = 48'd0; lp = 6'd0;
+        leadp = 16'sd0; leadc = 16'sd0; dd = 16'sd0;
+        p64 = 64'd0; c64 = 64'd0; mag64 = 64'd0; sum65 = 65'd0;
+        clsb = 10'd0; tz = 32'd0; eqv = 1'b0; ltv = 1'b0;
+        rz = 32'd0; flz = 5'd0; cvt64 = 64'd0; rb12 = 12'd0;
+        cinc = 64'd0; zint = 32'd0; cinv = 1'b0; sh_i = 0;
 
         case (op_q)
             FOP_ADD, FOP_SUB: begin
@@ -620,6 +631,7 @@ module fp_unit (
         pre2_valid = 1'b0; pre2_zero = 1'b0; pre2_sign = 1'b0;
         pre2_e = 16'sd0; pre2_sig = 32'd0; pre2_sticky = 1'b0;
         m64 = 64'd0; b2 = fq_base; s2 = 1'b0;
+        s65 = 65'd0; lzc = 7'd0;
         if (state == S_FMA) begin
             if (fq_sp == fq_sc) begin
                 s65 = {1'b0, fq_p64} + {1'b0, fq_c64};

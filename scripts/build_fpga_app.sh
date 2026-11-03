@@ -11,7 +11,8 @@ if [ $# -ne 1 ] || [ ! -d "$1" ]; then
 fi
 
 OUT="$ROOT/build/fpga/app"
-RUN_SIM=0 OUT="$OUT" APP_LD="$ROOT/sw/boot/app.ld" \
+MARCH="${MARCH:-rv32imafc_zicsr}"
+RUN_SIM=0 OUT="$OUT" APP_LD="$ROOT/sw/boot/app.ld" MARCH="$MARCH" \
     bash "$ROOT/scripts/build_app.sh" "$1"
 
 "$PYTHON" -I "$ROOT/scripts/uart_boot.py" --pack-only \

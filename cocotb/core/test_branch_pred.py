@@ -1,6 +1,6 @@
 """IF-stage branch prediction (rtl/core.v ``Branch prediction``).
 
-The BTB is 32 entries (``BTB_IBITS=5``): index ``IF_PC[6:2]``, tag
+The BTB is 64 entries (``BTB_IBITS=6``): index ``IF_PC[6:1]``, tag
 ``IF_PC[31:7]``, one 2-bit saturating direction counter per entry.  The lookup
 runs on registered ``IF_PC`` and its result (``IF_pred_taken_q``/
 ``IF_pred_target_q``) travels with the instruction through ID/EX.  In EX the

@@ -26,7 +26,7 @@ bash scripts/run_cocotb.sh cocotb/core    # 推荐：统一日志/退出码
 期望（默认 3 个随机种子）：
 
 ```text
-78 passed
+79 passed
 ```
 
 只跑一个文件或一个用例：
@@ -47,7 +47,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 - 构建产物：`build/cocotb_core/sim_build/`；cocotb 结果 XML：
   `build/cocotb_core/results/`。Icarus 增量编译，RTL/TB 不变时只有第一次慢。
 - 验证环境（Ubuntu 26.04，Icarus 12，cocotb 2.1.0，Python 3.14）默认 3 个种子约
-  **25 秒**跑完 78 项。
+  **29 秒**跑完 79 项。
 
 依赖：`.venv` 内安装 cocotb 2.1.0 与 pytest；Icarus 12 需在 `PATH` 中。core 套件的
 辅助代码全部在 `cocotb/core/_helpers.py` 内，不 import `cocotb/common/`。
@@ -104,6 +104,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | `test_bus.py` | 5 | 总线事务、等待冻结、`bus_conflict`、慢读、CSR 单次提交 |
 | `test_tcm_stall.py` | 7 | load-use 停顿深度、`IF_ID_hold`、`id_flush_q`、jalr link、div 冻结、TCM 写门控 |
 | `test_forward.py` | 12 | EX/MEM 距离的 ALU/mul/CSR/link/store/branch 前递、优先级、load-use 深度、div、trap 取消 |
+| `test_fwd_edge.py` | 1 | 同拍 store→load 字节合并、AMO 后普通 TCM load 的前递与短暂停 |
 | `test_branch_pred.py` | 10 | BTB 训练/饱和、交替方向、嵌套/自循环、异常/中断不训练、JALR 目标变化、RAS 嵌套/链接寄存器/错误纠正、陈旧项、冻结 |
 | `test_rvc.py` | 6 | 压缩 ALU/访存展开、lane-1 32 位指令、C.J/C.JAL/C.JALR/C.BEQZ/C.BNEZ、链接值与 2 字节目标、HINT、保留编码、mepc 掩码、BTB 两个 lane、压缩循环预测 |
 | `test_amo.py` | 4 | 九个 AMO（DTCM/ITCM）、写脉冲、LR/SC 重叠/失效/陷阱、load 类停顿、div 冻结、AMO→总线、aq/rl、中断、非对齐/MMIO 陷阱 |
@@ -138,7 +139,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | 25 FS=Off 陷阱、FS Dirty | `test_fp[fs_off]`、`test_fp[fflags]` |
 | 26-28 fflags/FLW-FSW/NaN 规则 | `test_fp[fflags]`；算术语义由 146 项 F ISA 测试覆盖 |
 | 29 RAS 提交/视图前递与错误纠正 | `test_branch_pred[ras_calls,exception_no_train,interrupt_no_train]` |
-| 30 TCM 提前读、store 合并与 MEM load 前递 | `test_forward[precedence,loaduse_depth,store_data]`、`test_tcm_stall`、`test_mem_rand` |
+| 30 TCM 提前读、store 合并与 MEM load 前递 | `test_forward[precedence,loaduse_depth,store_data]`、`test_fwd_edge`、`test_tcm_stall`、`test_mem_rand` |
 
 另外，§6.2 总线行为（单 outstanding、`bus_wait`、读数据捕获、写选通）由
 `test_bus.py` 覆盖；§9 第 5 条（定时器 CTRL 的 W1C）不在 core 套件范围内。

@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/env.sh"
 OUT="$ROOT/build/fpga"
 LOGS="$ROOT/logs/boot"
+export MARCH="${MARCH:-rv32imafc_zicsr}"
 mkdir -p "$OUT" "$LOGS"
 
 bash "$ROOT/scripts/build_boot.sh"
@@ -22,6 +23,20 @@ print(f'IMAGE_LEN={len(b)}')
 PY
 
 IMAGE_LEN=$(stat -c %s "$OUT/app/app.pkg")
+iverilog -g2012 -s tb_boot_init -o "$OUT/tb_boot_init.vvp" \
+    "$ROOT/sim/tb_boot_init.v" "$ROOT/fpga/soc_fpga_top.v" \
+    "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" \
+    "$ROOT/rtl/bus.v" "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" \
+    "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
+# soc_fpga_top's default ITCM_INIT_FILE is relative to the synthesis tool's
+# working directory; run from the repo root so the same default works here.
+( cd "$ROOT" && vvp "$OUT/tb_boot_init.vvp" "+BOOT_HEX=$OUT/boot/boot.hex" ) \
+    2>&1 | tee "$LOGS/tb_boot_init.log"
+if ! grep -q 'BOOT_INIT_PASS' "$LOGS/tb_boot_init.log"; then
+    echo "UART BOOT INIT TEST FAILED: see $LOGS/tb_boot_init.log" >&2
+    exit 1
+fi
+
 iverilog -g2012 -s tb_boot -o "$OUT/tb_boot.vvp" \
     "$ROOT/sim/tb_boot.v" "$ROOT/fpga/soc_fpga_top.v" \
     "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" \

@@ -44,20 +44,31 @@ class BootError(RuntimeError):
     pass
 
 
+class BootStatusError(BootError):
+    """A well-formed response carried a nonzero device status."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+# Statuses that describe the request itself; resending the same bytes cannot
+# change the answer, so request() must not burn retries on them.
+PERMANENT_STATUS = {2, 3, 4, 5}
+
+
 def crc32(data):
     return zlib.crc32(data) & 0xFFFFFFFF
 
 
-def make_header(image, entry=APP_ENTRY):
+def make_header(image):
     if not image or len(image) > APP_MAX:
         raise BootError(f"image size must be 1..{APP_MAX} bytes, got {len(image)}")
-    if entry != APP_ENTRY or (entry & 1):
-        raise BootError(f"entry must be the aligned boot-app address 0x{APP_ENTRY:x}")
-    return struct.pack("<IIII", APP_MAGIC, len(image), entry, crc32(image))
+    return struct.pack("<IIII", APP_MAGIC, len(image), APP_ENTRY, crc32(image))
 
 
-def make_package(image, entry=APP_ENTRY):
-    return make_header(image, entry) + image
+def make_package(image):
+    return make_header(image) + image
 
 
 def make_frame(command, sequence, address=0, payload=b""):
@@ -113,6 +124,8 @@ class SerialPort:
             if not writable:
                 raise BootError("serial write timeout")
             count = os.write(self.fd, view)
+            if count <= 0:
+                raise BootError("serial port stopped accepting data")
             view = view[count:]
 
     def read_byte(self, deadline):
@@ -122,9 +135,15 @@ class SerialPort:
                 raise BootError("serial response timeout")
             readable, _, _ = select.select([self.fd], [], [], remaining)
             if readable:
-                data = os.read(self.fd, 1)
-                if data:
-                    return data[0]
+                try:
+                    data = os.read(self.fd, 1)
+                except BlockingIOError:
+                    # select() can report readable just before another reader
+                    # drains the descriptor; keep waiting until the deadline.
+                    continue
+                if not data:
+                    raise BootError("serial port closed")
+                return data[0]
 
 
 class Bootloader:
@@ -170,17 +189,23 @@ class Bootloader:
             raise BootError("response has no status")
         status = struct.unpack("<I", payload[:4])[0]
         if status:
-            raise BootError(STATUS.get(status, f"bootloader status {status}"))
+            raise BootStatusError(
+                status, STATUS.get(status, f"bootloader status {status}"))
         return payload
 
     def request(self, command, address=0, payload=b"", timeout=2.0):
         sequence = self.next_sequence()
         frame = make_frame(command, sequence, address, payload)
         last_error = None
-        for _ in range(self.retries):
+        # --retries is the number of retries after the first attempt.
+        for _ in range(self.retries + 1):
             try:
                 self.serial.write(frame)
                 return self._read_response(command, sequence, timeout)
+            except BootStatusError as error:
+                if error.status in PERMANENT_STATUS:
+                    raise
+                last_error = error
             except BootError as error:
                 last_error = error
         raise BootError(f"command 0x{command:02x} failed after retries: {last_error}")
@@ -190,7 +215,8 @@ class Bootloader:
             raise BootError("package is empty")
         header, image = package[:16], package[16:]
         magic, length, entry, expected_crc = struct.unpack("<IIII", header)
-        if magic != APP_MAGIC or length != len(image) or expected_crc != crc32(image):
+        if (magic != APP_MAGIC or length != len(image) or
+                entry != APP_ENTRY or expected_crc != crc32(image)):
             raise BootError("package header does not match its application bytes")
 
         info = self.request(CMD_INFO)
@@ -231,15 +257,15 @@ def main(argv=None):
     parser.add_argument("--pack-only", action="store_true",
                         help="write 16-byte header + app and do not open a serial port")
     parser.add_argument("--output", help="package path required by --pack-only")
-    parser.add_argument("--entry", type=lambda value: int(value, 0), default=APP_ENTRY)
     parser.add_argument("--chunk", type=int, default=256, help="payload size, 1..256")
-    parser.add_argument("--retries", type=int, default=3)
+    parser.add_argument("--retries", type=int, default=3,
+                        help="retries after the first attempt")
     parser.add_argument("--no-run", action="store_true", help="stop after CRC verification")
     args = parser.parse_args(argv)
 
     try:
         image = Path(args.image).read_bytes()
-        package = make_package(image, args.entry)
+        package = make_package(image)
         if args.pack_only:
             if not args.output:
                 raise BootError("--pack-only requires --output")

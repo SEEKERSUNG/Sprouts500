@@ -5,7 +5,7 @@ source "$ROOT/scripts/env.sh"
 
 mkdir -p "$ROOT/build"
 
-MARCH="${MARCH:-rv32imacf_zicsr}"
+MARCH="${MARCH:-rv32imafc_zicsr}"
 "${RISCV_PREFIX}gcc" -march="$MARCH" -mabi=ilp32 -O2 \
     -nostdlib -nostartfiles -ffreestanding -Wl,--no-relax \
     -T "$ROOT/sw/demo/link.ld" \

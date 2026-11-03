@@ -65,7 +65,7 @@ bash scripts/sta.sh              # OpenSTA 报告
 5. 如果改动 `sw/lib/`、`sim/tb_app.v` 或 `scripts/build_app.sh`：运行
    `bash scripts/build_app.sh sw/example`，必须 `TEST_PASS`。
 6. 任何 RTL 改动：运行 `bash scripts/run_cocotb.sh`，必须
-   `cocotb regression PASSED`（当前 soc 72 + core 78 项）。
+   `cocotb regression PASSED`（当前 soc 72 + core 79 项）。
 7. 任何 RTL 改动：运行 `bash scripts/run_riscv_dv.sh`，必须 6/6 lockstep PASS
    （3 个随机种子 + 定向陷阱 + 定向 A + 定向 C）。
 8. 如果改动 `sw/boot/`、`fpga/`、`sim/tb_boot.v`、UART 下载脚本或 ITCM Boot 参数：
@@ -129,8 +129,10 @@ bash scripts/sta.sh              # OpenSTA 报告
     直接前递；同拍更老 store 写同 word 必须按字节合并，WB 保存本 load 原始 word。
     总线 load 和 AMO/LR/SC 不使用该前递，仍保持原停顿和 WB 数据路径。
 25. FPGA `ITCM_BOOT_BYTES` 写保护必须同时门控 ITCM 数组写和同拍 store/load 合并；
-    默认 0 保持普通自修改 ITCM 行为。`ITCM_INIT_FILE` 默认为空，现有 testbench 的显式
-    `$readmemh` 不变。FPGA Boot 布局/协议见 `docs/fpga_boot.md`。
+    保护区内的 SC 必须返回失败，AMO 写必须被忽略。默认 0 保持普通自修改 ITCM 行为。
+    `ITCM_INIT_FILE` 默认为空，现有 testbench 的显式 `$readmemh` 不变；非空时先把
+    整个 ITCM 清 0，再装载 Boot 镜像，避免缺失应用头在仿真中为 X。FPGA Boot 布局/
+    协议见 `docs/fpga_boot.md`。
 
 ## 风格与结构
 
@@ -161,7 +163,7 @@ bash scripts/sta.sh              # OpenSTA 报告
 - FPGA UART Boot：2 KiB 驻留 Boot、GPIO[0] 低有效 BOOT0、分帧 CRC32 下载和
   `0x810` 应用；协议单测与端到端仿真通过。详见 `docs/fpga_boot.md`。
 - cocotb 套件通过：`cocotb/soc` 72 项（总线 + 外设 + core 程序）、`cocotb/core`
-  78 项（流水线相关/前递/分支预测与 RAS/CSR/陷阱/中断/总线/停顿/RVC/A，以及 F 的
+  79 项（流水线相关/前递/分支预测与 RAS/CSR/陷阱/中断/总线/停顿/RVC/A，以及 F 的
   hazard/fflags/FS=Off 3 项）。F 语义由 146 项 ISA 测试覆盖。
 - riscv-dv + Sail 指令级随机 lockstep 通过（3 个随机种子 + 定向陷阱 + 定向 A +
   定向 C，6/6）。
@@ -170,9 +172,9 @@ bash scripts/sta.sh              # OpenSTA 报告
   （149.3 DMIPS，1.493 DMIPS/MHz，190,558 周期）。Dhrystone ground 的 GCC 14.2 历史参考为
   **135,660 Dhrystones/s**（77.2 DMIPS）。`MODE=ground|best` 只改编译方式，不改 benchmark
   源码算法；`MARCH=rv32im_zicsr` 可复现旧基线。
-- Yosys + Nangate45 综合在 Yosys 0.33 上运行通过（ABC fast + 驱动强度提升，
-  2-word TCM 时序配置，99,875 单元）。OpenSTA 3.1.0 100 MHz pre-CTS 为 **MET**：
-  setup +3.241 ns，hold +0.083 ns，TNS/WNS 0.00（理想时钟；CTS 后需复查 hold）。
+- Yosys + Nangate45 综合在 Yosys 0.52 上运行通过（ABC fast + 驱动强度提升，
+  2-word TCM 时序配置，97,225 单元）。OpenSTA 3.1.0 100 MHz pre-CTS 为 **MET**：
+  setup +3.148 ns，hold +0.083 ns，TNS/WNS 0.00（理想时钟；CTS 后需复查 hold）。
 - TCM 是推断阵列；完整签核需要 SRAM 宏 + Liberty RAM 模型。
 - Privilege 套件 / PMP / delegation 尚未实现。
 - 后续优先级见 `docs/roadmap.md`。
