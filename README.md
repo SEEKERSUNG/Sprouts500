@@ -43,13 +43,21 @@ bash scripts/build_app.sh sw/example   # 期望 TEST_PASS
 # 5. 性能分数（CoreMark + Dhrystone，可选）
 bash scripts/build_bench.sh        # 约 2–3 分钟；详见 docs/benchmarks.md
 
-# 6. 扩展验证（可选；cocotb 需要 python3.14-dev）
+# 6. FPGA UART 下载用户程序（可选）
+bash scripts/build_boot.sh                 # 2 KiB Boot 初始化镜像
+MARCH=rv32imafc_zicsr bash scripts/build_fpga_app.sh sw/example
+MARCH=rv32imafc_zicsr bash scripts/test_boot.sh  # 期望 BOOT_TEST_PASS
+# 用 fpga/soc_fpga_top.v 生成并下载比特流，按住 BOOT0（GPIO[0]）复位后：
+python3 scripts/uart_boot.py --port /dev/ttyUSB0 \
+    --image build/fpga/app/app.bin
+
+# 7. 扩展验证（可选；cocotb 需要 python3.14-dev）
 bash scripts/setup_cocotb.sh       # 一次性：.venv + cocotb/pytest
 bash scripts/run_cocotb.sh         # cocotb/soc + cocotb/core
 bash scripts/setup_riscv_dv.sh     # 一次性：.venv-dv + Sail 0.16
 bash scripts/run_riscv_dv.sh       # riscv-dv + Sail lockstep
 
-# 7. 综合 + 时序
+# 8. 综合 + 时序
 bash scripts/fetch_lib.sh          # Nangate45 Liberty（仅本地，不随仓库分发）
 bash scripts/synth.sh              # 生成 build/syn/core_netlist.v
 sudo bash scripts/setup_opensta.sh # 一次性安装 CUDD + OpenSTA 到 /opt/opensta
@@ -77,19 +85,9 @@ bash scripts/synth.sh && bash scripts/sta.sh
 
 ### FPGA UART 下载用户程序
 
-```bash
-bash scripts/build_boot.sh                 # 2 KiB Boot 初始化镜像
-bash scripts/build_fpga_app.sh sw/example  # 链接到 0x810 并生成 CRC package
-bash scripts/test_boot.sh                  # 协议单测 + 真实 UART 端到端仿真
-
-# 上板后按住 BOOT0（GPIO[0]，低有效）复位，然后：
-python3 scripts/uart_boot.py --port /dev/ttyUSB0 \
-    --image build/fpga/app/app.bin
-```
-
 FPGA 顶层为 `fpga/soc_fpga_top.v`；普通复位自动运行有效应用，按住 BOOT0 强制进入下载器。
-当前下载到易失性 ITCM，不含外部 Flash 烧写。引脚、协议和集成限制见
-`docs/fpga_boot.md`。
+构建、仿真和主机下载命令见上方“快速开始”第 6 步。当前下载到易失性 ITCM，不含外部
+Flash 烧写。引脚、协议和集成限制见 `docs/fpga_boot.md`。
 
 ## 文件布局
 

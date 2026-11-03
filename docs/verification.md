@@ -11,7 +11,7 @@
 python3 scripts/run_isa.py     # 期望：222/222 通过（I/M/C/F 官方 + A 定向）
 bash scripts/build_demo.sh     # 期望：TEST_PASS
 bash scripts/build_app.sh sw/example   # 自写 C 运行时；期望 TEST_PASS
-bash scripts/test_boot.sh       # FPGA UART Boot；期望 BOOT_TEST_PASS（Boot 相关改动）
+MARCH=rv32imafc_zicsr bash scripts/test_boot.sh  # FPGA UART Boot；期望 BOOT_TEST_PASS
 bash scripts/setup_cocotb.sh   # 一次性：.venv + cocotb/pytest（需要 python3.14-dev）
 bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 78 全部通过
 bash scripts/setup_riscv_dv.sh # 一次性：.venv-dv + Sail；见 docs/verification_riscv_dv.md

@@ -425,7 +425,7 @@ vvp build/app/tb_app.vvp +ITCM_HEX=build/app/app.hex
 
 ```bash
 bash scripts/build_boot.sh
-bash scripts/build_fpga_app.sh sw/lab
+MARCH=rv32imafc_zicsr bash scripts/build_fpga_app.sh sw/lab
 python3 scripts/uart_boot.py --port /dev/ttyUSB0 \
     --image build/fpga/app/app.bin
 ```

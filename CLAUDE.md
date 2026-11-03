@@ -39,8 +39,8 @@ bash scripts/build_demo.sh       # 必须打印 TEST_PASS
 bash scripts/build_app.sh sw/example  # 自写 C 程序模板（期望 TEST_PASS）
 bash scripts/build_bench.sh       # CoreMark + Dhrystone 性能分数
 bash scripts/build_boot.sh        # 2 KiB FPGA UART Boot 初始化镜像
-bash scripts/build_fpga_app.sh sw/example  # 0x810 应用 + CRC package
-bash scripts/test_boot.sh         # 协议单测 + UART 端到端 BOOT_TEST_PASS
+MARCH=rv32imafc_zicsr bash scripts/build_fpga_app.sh sw/example  # 0x810 应用 + CRC package
+MARCH=rv32imafc_zicsr bash scripts/test_boot.sh  # 协议单测 + UART 端到端 BOOT_TEST_PASS
 bash scripts/setup_cocotb.sh     # 一次性：.venv + cocotb/pytest（需 python3.14-dev）
 bash scripts/run_cocotb.sh       # cocotb/soc + cocotb/core 回归
 bash scripts/setup_riscv_dv.sh   # 一次性：.venv-dv + Sail

@@ -28,7 +28,7 @@ bash scripts/setup_ubuntu.sh
 python3 scripts/run_isa.py     # 222/222
 bash scripts/build_demo.sh     # TEST_PASS
 bash scripts/build_bench.sh    # CoreMark/Dhrystone best；MODE=ground 取 Dhrystone ground
-bash scripts/test_boot.sh      # FPGA UART Boot 协议单测 + BOOT_TEST_PASS
+MARCH=rv32imafc_zicsr bash scripts/test_boot.sh  # FPGA UART Boot 协议单测 + BOOT_TEST_PASS
 bash scripts/run_cocotb.sh     # soc 72 + core 78 项通过
 bash scripts/run_riscv_dv.sh   # riscv-dv + Sail lockstep 6/6 通过
 bash scripts/synth.sh

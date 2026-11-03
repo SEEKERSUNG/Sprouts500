@@ -36,13 +36,13 @@ bash scripts/build_boot.sh
 # build/fpga/boot/{boot.elf,boot.bin,boot.hex}
 
 # 用 Boot 应用链接脚本编译普通用户程序，并生成带 CRC 的 package
-bash scripts/build_fpga_app.sh sw/example
+MARCH=rv32imafc_zicsr bash scripts/build_fpga_app.sh sw/example
 # build/fpga/app/{app.elf,app.bin,app.hex,app.pkg}
 ```
 
-本机 GCC 13.2 对扩展顺序要求较严格，运行 `build_fpga_app.sh` 或 `test_boot.sh` 前先设置
-`MARCH=rv32imafc_zicsr`（与默认 `rv32imacf_zicsr` 相同的 ISA 集合）。Bootloader 自身的
-`BOOT_MARCH` 默认已是规范顺序，不需要额外设置。
+命令显式使用 `MARCH=rv32imafc_zicsr`，与默认 `rv32imacf_zicsr` 是相同的 ISA 集合，
+同时兼容对扩展顺序要求较严格的本机 GCC 13.2。也可通过 `MARCH` 覆盖其他目标配置；
+Bootloader 自身的 `BOOT_MARCH` 默认已是规范顺序，不需要额外设置。
 
 将 `fpga/soc_fpga_top.v` 作为 FPGA 顶层，连同 `rtl/*.v` 一起综合。默认初始化文件是
 `build/fpga/boot/boot.hex`，路径相对于综合工具工作目录；也可以在顶层参数中传入绝对路径。
@@ -116,7 +116,7 @@ Bootloader 拒绝任何低于 `0x800`、超过 mailbox 前边界或发生地址�
 ## 4. 验证
 
 ```bash
-bash scripts/test_boot.sh
+MARCH=rv32imafc_zicsr bash scripts/test_boot.sh
 # 或 make boot-test
 ```
 
