@@ -2,14 +2,16 @@
 
 Before forwarding every RAW dependency at pipeline distance 0/1 stalled ID until
 the producer reached WB.  With EX/MEM->ID forwarding the operand mux reads the
-producer result directly out of EX or MEM, so only load producers (data lives in
-``mem_*_rdata_q``/``bus_rdata_q`` until the MEM->WB edge) still stall:
+producer result directly out of EX or MEM.  Ordinary TCM loads are read at the
+EX->MEM edge and also forward from MEM; bus loads and AMO/LR/SC still wait for
+``bus_rdata_q``/WB:
 
     priority: x0 (hardwired) > EX > MEM > WB bypass > regfile
     EX  forwarded   : EX_valid && EX_rd_write_req && !EX_mem_read &&
                       !(divider in EX and not yet DIV_DONE)
-    MEM forwarded   : MEM_valid && MEM_rd_write_req && !MEM_mem_read
-    load-use stalls : 2 cycles at distance 0, 1 at distance 1, 0 afterwards
+    MEM forwarded   : ALU results plus ordinary ITCM/DTCM loads
+    load-use stalls : 1 cycle at distance 0, 0 at distance 1 on TCM;
+                      bus loads and AMO/LR/SC retain the WB-based stalls.
 
 Each case builds a short program, runs it against the reference interpreter
 (retirement trace + regfile + ITCM/DTCM/bus images) and checks cycle-level
@@ -31,9 +33,9 @@ alu_ex        distance-0 ALU/mul/LUI/shift producers used on rs1, rs2 and both:
               zero raw_stall and the forwards are observed in ID.
 alu_mem       producer one slot ahead (in MEM while the consumer is in ID):
               zero raw_stall, MEM forward observed.
-precedence    EX beats MEM on the same rd, and a load producer is never
-              forwarded out of MEM (the consumer still stalls two cycles).
-loaduse_depth exactly 2/1/0 consecutive raw_stall cycles at distance 0/1/2.
+precedence    EX beats MEM on the same rd, and an ordinary TCM load forwards
+              from MEM while bus/atomic producers keep their WB-based stalls.
+loaduse_depth exactly 1/0/0 consecutive raw_stall cycles at distance 0/1/2.
 x0            producers writing x0 never leak into a consumer reading x0.
 div           div/rem consumed immediately and at distance 1: forwarded at
               DIV_DONE, only divider-freeze stalls in the windows.
@@ -451,7 +453,8 @@ def build_precedence(seed=0):
     producers = {}
 
     # Load first, ALU second: both write x5.  EX (the younger addi) must win
-    # over MEM (the load).  The consumer still stalls two cycles on the load.
+    # over MEM (the load); the intervening ALU slot also lets the TCM load
+    # forward from MEM without a stall.
     l = a.here()
     a.lw(5, 10, 0)                       # x5 = 0xDEAD_BEEF
     p_ex = a.here()
@@ -460,20 +463,18 @@ def build_precedence(seed=0):
     a.add(6, 5, 0)
     fwd[c] = [{"src": "EX", "rd": 5, "rs1": 9, "value": 9}]
     # The load and the addi share x5: the addi in EX already carries the
-    # right value, so the stall is the ordinary two-cycle load-use stall
-    # that forwarding cannot remove.
-    producers[c] = [l]
+    # right value, and the TCM load can forward from MEM without a stall.
+    producers[c] = []
 
-    # ALU first, load second: the load value must win (it is younger).  The
-    # load is never MEM-forwarded, so the consumer stalls two cycles and the
-    # final operand comes through the WB bypass.
+    # ALU first, load second: the load value must win (it is younger).  A TCM
+    # load forwards from MEM, leaving one EX-stage dependency cycle.
     p_alu = a.here()
     a.addi(5, 0, 1)
     l = a.here()
     a.lw(5, 10, 4)                       # x5 = 0xCAFE_0001
     c2 = a.here()
     a.add(7, 5, 0)
-    producers[c2] = [l, l]
+    producers[c2] = [l]
 
     a.add(2, 2, 6)
     a.add(2, 2, 7)
@@ -496,21 +497,21 @@ def build_loaduse_depth(seed=0):
     producers = {}
     pcs = {}
 
-    # distance 0: exactly two raw_stall cycles.
+    # distance 0: exactly one raw_stall cycle (the EX-stage dependency).
     l = a.here()
     a.lw(5, 10, 0)
     c = a.here()
     a.addi(6, 5, 1)
-    producers[c] = [l, l]
+    producers[c] = [l]
     pcs["d0"] = (l, c)
 
-    # distance 1: exactly one raw_stall cycle.
+    # distance 1: the MEM load forwards directly, so no stall.
     l = a.here()
     a.lw(7, 10, 4)
     a.nop()
     c = a.here()
     a.addi(8, 7, 1)
-    producers[c] = [l]
+    producers[c] = []
     pcs["d1"] = (l, c)
 
     # distance 2: no stall (WB bypass only).
@@ -734,7 +735,7 @@ def build_store_data(seed=0):
     a.lw(4, 10, 0)
     c = a.here()
     a.add(5, 5, 4)
-    producers[c] = [l, l]
+    producers[c] = [l]
 
     # DTCM sh: data produced one slot ahead (MEM forward).
     a.li(6, v_sh)                        # addi (16-bit value > 2047)
@@ -745,7 +746,7 @@ def build_store_data(seed=0):
     a.lhu(7, 11, 0)
     c = a.here()
     a.add(5, 5, 7)
-    producers[c] = [l, l]
+    producers[c] = [l]
 
     # DTCM sb: data produced by mul at distance 0 (EX forward).
     a.mul(8, 6, 6)
@@ -756,7 +757,7 @@ def build_store_data(seed=0):
     a.lbu(9, 22, 0)
     c = a.here()
     a.add(5, 5, 9)
-    producers[c] = [l, l]
+    producers[c] = [l]
 
     # ITCM data window sw at distance 0 (EX forward).
     a.li(14, v_itcm)
@@ -766,7 +767,7 @@ def build_store_data(seed=0):
     a.lw(15, 20, 0)
     c = a.here()
     a.add(5, 5, 15)
-    producers[c] = [l, l]
+    producers[c] = [l]
 
     # Bus sw at distance 1 (MEM forward), while MEM waits on the slave.
     a.li(16, v_bus)
@@ -1019,17 +1020,15 @@ async def _run_precedence(dut, case):
     expect(h.reg(6) == 9,
            f"precedence: x6=0x{h.reg(6)!r}, expected 9 (younger EX producer "
            f"must beat the load in MEM)")
-    expect(len(tr.load_stalls_at(c_ex)) == 1,
+    expect(len(tr.load_stalls_at(c_ex)) == 0,
            f"precedence: the first consumer was held in ID "
            f"{len(tr.load_stalls_at(c_ex))} cycle(s); with an ALU instruction "
-           f"between the load and the consumer the load is already in MEM, "
-           f"so exactly one load-use cycle is expected "
+           f"between the load and the consumer the TCM load forwards from MEM "
            f"({tr.load_stalls_at(c_ex)})")
     expect(h.reg(7) == 0xCAFE_0001,
-           f"precedence: x7=0x{h.reg(7)!r}, expected the load value through "
-           f"the WB bypass")
-    expect(len(tr.load_stalls_at(c_mem)) == 2,
-           "precedence: the load-over-ALU consumer did not stall two cycles")
+           f"precedence: x7=0x{h.reg(7)!r}, expected the younger load value")
+    expect(len(tr.load_stalls_at(c_mem)) == 1,
+           "precedence: the load-over-ALU consumer did not stall once in EX")
     dut._log.info("precedence: x6=9 (EX>MEM), x7=0x%08x (load via WB), "
                   "stalls first=%d second=%d", h.reg(7),
                   len(tr.load_stalls_at(c_ex)), len(tr.load_stalls_at(c_mem)))
@@ -1038,15 +1037,15 @@ async def _run_precedence(dut, case):
 async def _run_loaduse_depth(dut, case):
     res, exp = await _run_plain(dut, case, build_loaduse_depth)
     tr = res["tr"]
-    want = {"d0": 2, "d1": 1, "d2": 0}
+    want = {"d0": 1, "d1": 0, "d2": 0}
     got = {}
     for key, (_l, cons) in exp["depth_pcs"].items():
         got[key] = len(tr.load_stalls_at(cons))
         expect(got[key] == want[key],
                f"loaduse_depth: {key} consumer stalled {got[key]} cycle(s), "
                f"expected {want[key]} (all cycles {len(tr.stalls_at(cons))})")
-    expect(res["stats"]["raw_stall"] == 3,
-           f"loaduse_depth: raw_stall={res['stats']['raw_stall']}, expected 3")
+    expect(res["stats"]["raw_stall"] == 1,
+           f"loaduse_depth: raw_stall={res['stats']['raw_stall']}, expected 1")
     expect(res["h"].reg(6) == 0x1000_0001 and res["h"].reg(8) == 0x1000_0002
            and res["h"].reg(11) == 0x1000_0003, "loaduse_depth: wrong values")
     dut._log.info("loaduse_depth: stalls d0=%d d1=%d d2=%d", got["d0"],

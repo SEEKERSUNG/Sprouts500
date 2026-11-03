@@ -9,9 +9,11 @@
 //   0x2000_3000  spi
 
 module soc_top #(
-    parameter [31:0] RESET_PC   = 32'h0000_0000,
-    parameter        ITCM_WORDS = 8192,
-    parameter        DTCM_WORDS = 4096
+    parameter [31:0] RESET_PC        = 32'h0000_0000,
+    parameter        ITCM_WORDS      = 8192,
+    parameter        DTCM_WORDS      = 4096,
+    parameter [31:0] ITCM_BOOT_BYTES = 32'd0,
+    parameter        ITCM_INIT_FILE  = ""
 )(
     input  wire        clk,
     input  wire        rstn,
@@ -75,7 +77,9 @@ module soc_top #(
     core #(
         .RESET_PC(RESET_PC),
         .ITCM_WORDS(ITCM_WORDS),
-        .DTCM_WORDS(DTCM_WORDS)
+        .DTCM_WORDS(DTCM_WORDS),
+        .ITCM_BOOT_BYTES(ITCM_BOOT_BYTES),
+        .ITCM_INIT_FILE(ITCM_INIT_FILE)
     ) u_core (
         .clk(clk),
         .rstn(rstn),

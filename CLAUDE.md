@@ -27,6 +27,7 @@ Sprouts500 是一个最简的五级顺序 **RV32IMACF** MCU IP：
 6. `docs/c_programming.md` — 自己写裸机 C 程序测试（`sw/lib` + `tb_app.v`）。
 7. `docs/verification_cocotb.md`、`docs/verification_cocotb_core.md` — cocotb 套件。
 8. `docs/verification_riscv_dv.md` — riscv-dv + Sail 指令级随机 lockstep。
+9. `docs/fpga_boot.md` — FPGA BOOT0/UART 下载、协议与集成。
 
 ## 命令（Ubuntu）
 
@@ -37,6 +38,9 @@ python3 scripts/run_isa.py       # 必须是 222/222（I 38 + M 8 + C 27 + A 3 +
 bash scripts/build_demo.sh       # 必须打印 TEST_PASS
 bash scripts/build_app.sh sw/example  # 自写 C 程序模板（期望 TEST_PASS）
 bash scripts/build_bench.sh       # CoreMark + Dhrystone 性能分数
+bash scripts/build_boot.sh        # 2 KiB FPGA UART Boot 初始化镜像
+bash scripts/build_fpga_app.sh sw/example  # 0x810 应用 + CRC package
+bash scripts/test_boot.sh         # 协议单测 + UART 端到端 BOOT_TEST_PASS
 bash scripts/setup_cocotb.sh     # 一次性：.venv + cocotb/pytest（需 python3.14-dev）
 bash scripts/run_cocotb.sh       # cocotb/soc + cocotb/core 回归
 bash scripts/setup_riscv_dv.sh   # 一次性：.venv-dv + Sail
@@ -61,9 +65,11 @@ bash scripts/sta.sh              # OpenSTA 报告
 5. 如果改动 `sw/lib/`、`sim/tb_app.v` 或 `scripts/build_app.sh`：运行
    `bash scripts/build_app.sh sw/example`，必须 `TEST_PASS`。
 6. 任何 RTL 改动：运行 `bash scripts/run_cocotb.sh`，必须
-   `cocotb regression PASSED`（当前 soc 72 + core 77 项）。
+   `cocotb regression PASSED`（当前 soc 72 + core 78 项）。
 7. 任何 RTL 改动：运行 `bash scripts/run_riscv_dv.sh`，必须 6/6 lockstep PASS
    （3 个随机种子 + 定向陷阱 + 定向 A + 定向 C）。
+8. 如果改动 `sw/boot/`、`fpga/`、`sim/tb_boot.v`、UART 下载脚本或 ITCM Boot 参数：
+   运行 `bash scripts/test_boot.sh`，必须 `BOOT_TEST_PASS`。
 
 如果测试失败，读 `logs/isa/<name>.log`；在 testbench 上使用 `+TRACE`、
 `+TRACE_PIPE` 和 `+VCD`。ISA runner 会打印前 16 个签名不匹配项。
@@ -116,13 +122,23 @@ bash scripts/sta.sh              # OpenSTA 报告
 22. NaN 统一为规范 qNaN `0x7fc00000`；NV/DZ/OF/UF/NX 和 FMIN/FMAX/比较的 NaN 规则
     必须与 RISC-V SoftFloat 一致（见 `rtl/fp_unit.v`）。FMA 是单次舍入，FDIV/FSQRT
     是迭代精确实现。
+23. 4 项 RAS 的架构状态只在 EX 的真实 call/return 上 push/pop；IF 预测视图组合应用
+    ID/EX 中更老操作，避免短函数读取旧栈顶。陷阱和 `mret` 清空 RAS，错误目标仍由 EX
+    重定向纠正。
+24. 普通 TCM load 在 EX->MEM 边沿捕获读数据，distance-0 load-use 只停 1 拍，MEM 可
+    直接前递；同拍更老 store 写同 word 必须按字节合并，WB 保存本 load 原始 word。
+    总线 load 和 AMO/LR/SC 不使用该前递，仍保持原停顿和 WB 数据路径。
+25. FPGA `ITCM_BOOT_BYTES` 写保护必须同时门控 ITCM 数组写和同拍 store/load 合并；
+    默认 0 保持普通自修改 ITCM 行为。`ITCM_INIT_FILE` 默认为空，现有 testbench 的显式
+    `$readmemh` 不变。FPGA Boot 布局/协议见 `docs/fpga_boot.md`。
 
 ## 风格与结构
 
 - 使用 Verilog-2001，不使用 SystemVerilog 语法。CPU 流水线保持在 `rtl/core.v`，
   RV32F 数据通路在 `rtl/fp_unit.v`；两者一起构成 core，不要把流水线拆到更多文件。
 - 软件默认 `-march=rv32imacf_zicsr`；`MARCH=` 可覆盖。
-- 流水线已启用 EX/MEM->ID 前递与 IF 级分支预测；新增优化必须有实测收益并保持全部门禁。
+- 流水线已启用 EX/MEM->ID 前递、普通 TCM load 的 MEM 前递，以及 IF 级 BTB + 4 项
+  RAS；新增优化必须有实测收益并保持全部门禁。
 - 与周围风格一致：紧凑的连续赋值，组合译码用 `always @(*)`，状态用同步复位
   `always @(posedge clk)` + `if (!rstn)`（core 和 FPU 都是同步低有效复位）。
 - 注释应解释非显然控制存在的原因（例如 `bus_conflict`、`IF_ID_hold`），而不是复述
@@ -142,18 +158,21 @@ bash scripts/sta.sh              # OpenSTA 报告
 
 - 222/222 ISA 测试（I/M/C 官方 + A 定向 + F 官方）在 Ubuntu 26.04 通过（GCC 14.2，Icarus 12）。
 - SoC demo 在 Ubuntu 26.04 通过（UART hello、GPIO、定时器中断）。
+- FPGA UART Boot：2 KiB 驻留 Boot、GPIO[0] 低有效 BOOT0、分帧 CRC32 下载和
+  `0x810` 应用；协议单测与端到端仿真通过。详见 `docs/fpga_boot.md`。
 - cocotb 套件通过：`cocotb/soc` 72 项（总线 + 外设 + core 程序）、`cocotb/core`
-  77 项（流水线相关/前递/分支预测/CSR/陷阱/中断/总线/停顿/RVC/A，以及 F 的
+  78 项（流水线相关/前递/分支预测与 RAS/CSR/陷阱/中断/总线/停顿/RVC/A，以及 F 的
   hazard/fflags/FS=Off 3 项）。F 语义由 146 项 ISA 测试覆盖。
 - riscv-dv + Sail 指令级随机 lockstep 通过（3 个随机种子 + 定向陷阱 + 定向 A +
   定向 C，6/6）。
-- 性能基线（100 MHz）：CoreMark best **289.69**（2.90 CoreMark/MHz，RV32IMACF）；Dhrystone
-  ground **135,660 Dhrystones/s**（77.2 DMIPS），best **248,690 Dhrystones/s**
-  （141.5 DMIPS，1.415 DMIPS/MHz）。`MODE=ground|best` 只改编译方式，不改 benchmark
+- 性能基线（100 MHz，best 为本机 GCC 13.2 实测）：CoreMark best **308.175**
+  （3.08 CoreMark/MHz，324,490 周期，RV32IMACF）；Dhrystone best **262,387 Dhrystones/s**
+  （149.3 DMIPS，1.493 DMIPS/MHz，190,558 周期）。Dhrystone ground 的 GCC 14.2 历史参考为
+  **135,660 Dhrystones/s**（77.2 DMIPS）。`MODE=ground|best` 只改编译方式，不改 benchmark
   源码算法；`MARCH=rv32im_zicsr` 可复现旧基线。
-- Yosys + Nangate45 综合在 Yosys 0.52 上运行通过（ABC fast + 驱动强度提升，
-  2-word TCM 时序配置，约 97.0k 单元）。OpenSTA 3.1.0 100 MHz pre-CTS 为 **MET**：
-  setup +3.251 ns，hold +0.083 ns，TNS/WNS 0.00（理想时钟；CTS 后需复查 hold）。
+- Yosys + Nangate45 综合在 Yosys 0.33 上运行通过（ABC fast + 驱动强度提升，
+  2-word TCM 时序配置，99,875 单元）。OpenSTA 3.1.0 100 MHz pre-CTS 为 **MET**：
+  setup +3.241 ns，hold +0.083 ns，TNS/WNS 0.00（理想时钟；CTS 后需复查 hold）。
 - TCM 是推断阵列；完整签核需要 SRAM 宏 + Liberty RAM 模型。
 - Privilege 套件 / PMP / delegation 尚未实现。
 - 后续优先级见 `docs/roadmap.md`。

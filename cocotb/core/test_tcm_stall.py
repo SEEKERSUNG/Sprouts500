@@ -288,29 +288,27 @@ def _case_checks(h, case, exp, stats, pcs, frozen_mem):
         consume = exp["consume_pc"]
         expect(pcs.count(consume) == 1,
                f"consumer 0x{consume:x} retired {pcs.count(consume)} times")
-        # Distance-0 load-use: the consumer waits in ID while the load is in
-        # EX, then in MEM.  EX/MEM->ID forwarding deliberately excludes load
-        # producers, so both cycles remain (measured exactly 2).
-        expect(stats["raw_stall"] >= 2,
+        # Distance-0 TCM load-use: the consumer waits one cycle while the
+        # load is in EX, then takes the MEM forwarding value.
+        expect(stats["raw_stall"] >= 1,
                f"raw_stall only {stats['raw_stall']} cycle(s) for a load-use "
-               f"pair (expected EX and MEM dependency cycles)")
+               f"pair (expected the EX dependency cycle)")
         expect(stats["IF_ID_hold"] >= 1, "IF_ID_hold never asserted")
         expect(h.reg(5) == 0 and h.reg(6) == 1, "consumer got a wrong operand")
         expect(h.reg(2) == 1, "accumulator did not sum the consumer result")
     elif case == "hold":
-        # Each of the 30 chains is a distance-0 load-use pair, so forwarding
-        # leaves exactly two raw_stall cycles per chain (measured 60).  The
-        # old >20 bound predates forwarding but stays as the lower bound.
-        expect(stats["raw_stall"] >= 2 * 30,
+        # Each of the 30 chains is a distance-0 TCM load-use pair, leaving
+        # exactly one EX-stage raw_stall cycle per chain (measured 30).
+        expect(stats["raw_stall"] >= 30,
                f"only {stats['raw_stall']} raw_stall cycles for 30 load-use "
-               f"chains (each distance-0 pair needs 2)")
+               f"chains (each distance-0 pair needs 1)")
         expect(stats["IF_ID_hold"] >= stats["raw_stall"],
                f"only {stats['IF_ID_hold']} IF_ID_hold cycles for "
                f"{stats['raw_stall']} stall cycles")
     elif case == "branch":
-        # The bne consumes the preceding load at distance 0: still two stalls
-        # after forwarding (load producers are never forwarded).
-        expect(stats["raw_stall"] >= 2,
+        # The bne consumes the preceding TCM load at distance 0: one EX-stage
+        # stall, then the MEM forwarding value reaches the branch comparison.
+        expect(stats["raw_stall"] >= 1,
                f"bne behind a load-use pair stalled only "
                f"{stats['raw_stall']} cycle(s); the branch did not wait for "
                f"its load")
@@ -359,8 +357,8 @@ def _case_checks(h, case, exp, stats, pcs, frozen_mem):
                f"dead-path add wrote the register")
         expect(h.reg(7) == exp["x7"], f"x7={h.reg(7)!r} != {exp['x7']}")
     elif case == "jalr":
-        # jalr consumes the load at distance 0 (2 stalls); the later load-use
-        # pair adds 2 more (measured 4, link forwarding contributes none).
+        # jalr consumes the load at distance 0 (1 stall); the later load-use
+        # pair adds 1 more (measured 2, link forwarding contributes none).
         expect(stats["raw_stall"] >= 2,
                f"jalr behind a load-use pair stalled only "
                f"{stats['raw_stall']} cycle(s); the jalr did not wait for "

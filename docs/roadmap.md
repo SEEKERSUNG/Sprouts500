@@ -2,8 +2,8 @@
 
 ## 已完成
 
-- 五级 RV32IMACF core，带 ITCM/DTCM、EX/MEM->ID 前递、IF 级 BTB 分支预测，
-  以及分级流水线的 RV32F 浮点单元。
+- 五级 RV32IMACF core，带 ITCM/DTCM、EX/MEM->ID 前递、普通 TCM load 的 MEM
+  前递、IF 级 BTB + 4 项 RAS，以及分级流水线的 RV32F 浮点单元。
   RVC 在 IF 展开为 32 位（IALIGN=16，双 word 取指窗口无装配气泡）；RV32A 为
   LR.W/SC.W + 九个 AMO*.W，支持 TCM。
 - 机器模式 CSR、陷阱、定时器/软件/外部中断、`mret`。
@@ -11,12 +11,14 @@
 - F 扩展：RV32F 浮点单元（`rtl/fp_unit.v`，分级流水线），支持 FLW/FSW、算术、
   FMA、除法/开方、比较、分类、转换和五种舍入模式；fcsr/fflags/mstatus.FS 完整。
 - 简易总线，带字节 strobe、ready 握手、连续事务分离。
+- FPGA UART Bootloader：2 KiB 受保护驻留 Boot、GPIO[0] 低有效 BOOT0、CRC32 分帧
+  下载、普通复位自动启动；主机脚本和端到端 UART 仿真。
 - 定时器、GPIO、UART、SPI 外设和 SoC top。
 - 官方 `riscv-arch-test` 2.x RV32I/M/C：73/73 通过；项目自带 A 定向测试 3/3。
   官方 F 套件 146/146。合计 ISA 222/222。
 - 裸机 SoC demo：UART hello、GPIO、三次定时器中断。
-- cocotb 套件：SoC/外设 72 项 + core 微架构 77 项（含 RVC 6 项、A 4 项、F 3 项），
-  含随机与定向测试；F 不在 RV32Interp 中，由 146 项 ISA F 测试覆盖。
+- cocotb 套件：SoC/外设 72 项 + core 微架构 78 项（含 RVC 6 项、A 4 项、F 3 项、
+  RAS 定向 1 项），含随机与定向测试；F 不在 RV32Interp 中，由 146 项 ISA F 测试覆盖。
 - riscv-dv + Sail 指令级随机 lockstep 验证（3 个随机种子 + 定向陷阱 + 定向 A +
   定向 C，6/6）。随机生成器仍只产生 I/M；C/A 由定向镜像覆盖，F 由 ISA 套件覆盖。
 - benchmark：CoreMark best（RV32IMACF）与 Dhrystone ground/best，
@@ -39,6 +41,7 @@
    - 用 SRAM 宏 / FPGA BRAM 替换推断阵列，获得真实时序和面积。
    - 增加带干净读/写接口和 Liberty 模型的存储器 wrapper。
    - 为 FPGA/ASIC 流程参数化大小和初始化文件。
+   - UART Boot 当前写入易失性 ITCM；后续增加 QSPI Flash 应用镜像读写和掉电启动。
 
 3. **Privilege / 平台测试**
    - 2.x `privilege` 套件需要可写的 `mtvec` trampoline、`medeleg`、`mideleg`、
@@ -58,7 +61,11 @@
 6. **性能（可选）**
    - ~~增加 EX/MEM->ID 前递~~（已完成）。
    - ~~小分支缓冲~~（已完成：64 项 BTB + 2-bit 计数器）。
-   - 后续可选：返回地址栈（RAS）改善函数返回的预测、更大/关联 BTB。
+   - ~~返回地址栈~~（已完成：4 项 RAS，含 RVC、嵌套调用和错误目标纠正）。
+   - ~~普通 TCM load-use 2→1 拍~~（已完成：MEM 前递；总线/A 保持原路径）。
+   - 已建立本地 benchmark 停顿/重定向 profiling；实测 CoreMark +9.43%、Dhrystone
+     +5.77%（同 GCC 13.2 对照，详见 `docs/benchmarks.md`）。
+   - 后续可选：根据新 workload 的统计再考虑更大/关联 BTB、Radix-4 除法器或 FP 前递。
    - 保持设计最简；性能工作不能破坏 ISA/cocotb/lockstep 门禁。
 
 7. **调试 / 集成（可选）**

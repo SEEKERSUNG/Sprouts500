@@ -418,7 +418,26 @@ vvp build/app/tb_app.vvp +ITCM_HEX=build/app/app.hex
 
 ---
 
-## 9. 官方参考
+## 9. 下载到 FPGA 运行
+
+普通 `build_app.sh` 链接到地址 0，供 `tb_app.v` 直接预载；FPGA UART Boot 应用需要使用
+`sw/boot/app.ld`，入口改为 `0x810`：
+
+```bash
+bash scripts/build_boot.sh
+bash scripts/build_fpga_app.sh sw/lab
+python3 scripts/uart_boot.py --port /dev/ttyUSB0 \
+    --image build/fpga/app/app.bin
+```
+
+`build_fpga_app.sh` 通过 `RUN_SIM=0`、`APP_LD=...` 和 `OUT=build/fpga/app` 复用同一套
+`crt0/trap/soc/string` 运行时，并生成带 magic/长度/入口/CRC32 的 `app.pkg`。按住低有效
+BOOT0（GPIO[0]）复位后运行主机脚本即可。地址布局、协议、写保护和限制见
+`docs/fpga_boot.md`。
+
+---
+
+## 10. 官方参考
 
 通用 RISC-V 裸机资料（不涉及本仓库的存储器映射和外设）：
 

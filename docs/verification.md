@@ -11,15 +11,16 @@
 python3 scripts/run_isa.py     # 期望：222/222 通过（I/M/C/F 官方 + A 定向）
 bash scripts/build_demo.sh     # 期望：TEST_PASS
 bash scripts/build_app.sh sw/example   # 自写 C 运行时；期望 TEST_PASS
+bash scripts/test_boot.sh       # FPGA UART Boot；期望 BOOT_TEST_PASS（Boot 相关改动）
 bash scripts/setup_cocotb.sh   # 一次性：.venv + cocotb/pytest（需要 python3.14-dev）
-bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 77 全部通过
+bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 78 全部通过
 bash scripts/setup_riscv_dv.sh # 一次性：.venv-dv + Sail；见 docs/verification_riscv_dv.md
 bash scripts/run_riscv_dv.sh   # 期望：6/6 lockstep PASS（3 随机 + 定向陷阱/A/C）
 bash scripts/synth.sh          # 期望：Yosys 完成并写出 build/syn/core_netlist.v
 bash scripts/sta.sh            # 在 sudo bash scripts/setup_opensta.sh 之后；期望 setup/hold MET
 ```
 
-`scripts/sta.sh` 在 100 MHz 下当前报告 setup **+3.251 ns**、hold **+0.083 ns**、
+`scripts/sta.sh` 在 100 MHz 下当前报告 setup **+3.241 ns**、hold **+0.083 ns**、
 TNS/WNS **0.00**（OpenSTA 3.1.0，理想时钟，2-word TCM 时序配置）。时钟尚未做 CTS，
 因此 CTS 后以及换用 SRAM 宏后需要重新跑 hold 签核。
 
@@ -253,9 +254,9 @@ Plusarg：`+ITCM_HEX=`、`+MAX_CYCLES=`、`+VCD`。
 
 `bash scripts/synth.sh` 在 CPU 时序运行时把 ITCM/DTCM 设为 2 word，依次运行
 `synth`、`dfflibmap`、`abc -fast -liberty`，写出结构网表，然后运行
-`scripts/upsize_fanout.py` 提升高扇出驱动的强度。该时序配置约 97.0k 个
+`scripts/upsize_fanout.py` 提升高扇出驱动的强度。当前该时序配置为 **99,875** 个
 Nangate45 单元。`bash scripts/sta.sh` 随后报告 100 MHz pre-CTS 结果：setup
-+3.251 ns / hold +0.083 ns，TNS/WNS 0.00。完整签核必须用 SRAM 宏替换 TCM，并在 CTS
++3.241 ns / hold +0.083 ns，TNS/WNS 0.00。完整签核必须用 SRAM 宏替换 TCM，并在 CTS
 后重新检查 hold。如果 Yosys 报告推断 latch、多驱动或 `$mem` 单元，请先修 RTL 或脚本。
 
 ## 8. cocotb 与 riscv-dv 套件
@@ -275,5 +276,14 @@ Nangate45 单元。`bash scripts/sta.sh` 随后报告 100 MHz pre-CTS 结果：s
     F 没有加入随机生成器或 lockstep 比较，由 ISA F 套件覆盖。
   - 详见 `docs/verification_riscv_dv.md`。
 
-当前基线：cocotb **72 + 77 项通过**；riscv-dv + Sail 默认 3 个种子加三个定向镜像
+当前基线：cocotb **72 + 78 项通过**；riscv-dv + Sail 默认 3 个种子加三个定向镜像
 **6/6 `COMPARE_PASS`**。
+
+## 9. FPGA UART Boot 回归
+
+`bash scripts/test_boot.sh` 先运行 `tests/boot/test_uart_boot.py` 的 5 项协议/打包单元测试，
+再构建 2 KiB Bootloader 和 `sw/boot_test` 应用，在 `sim/tb_boot.v` 上通过真实 UART RTL
+完成下载。检查包括 CRC/越界/未知命令拒绝、非对齐分块、逐字节 ITCM 比较、Boot 写保护、
+应用运行、普通复位自动启动和 BOOT0 强制下载。成功标志为 `BOOT_TEST_PASS`，日志在
+`logs/boot/tb_boot.log`。协议和 FPGA 集成见 `docs/fpga_boot.md`；该仿真不替代实际上板、
+BRAM 和引脚时序签核。

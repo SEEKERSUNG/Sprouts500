@@ -11,6 +11,8 @@
 # overrides the weak default.
 #
 # Output: build/app/{app.elf,app.bin,app.hex,tb_app.vvp,run.log}
+# Optional: OUT=..., APP_LD=... select another build/link layout; RUN_SIM=0
+# compiles the image without running the normal address-0 application TB.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/env.sh"
@@ -25,7 +27,8 @@ APP_DIR="$(cd "$1" && pwd)"
 shift
 
 LIB="$ROOT/sw/lib"
-OUT="$ROOT/build/app"
+OUT="${OUT:-$ROOT/build/app}"
+LINKER_SCRIPT="${APP_LD:-$LIB/app.ld}"
 mkdir -p "$OUT"
 
 SRCS=()
@@ -60,7 +63,7 @@ MARCH="${MARCH:-rv32imacf_zicsr}"
     -mcmodel=medany -msmall-data-limit=0 \
     -O2 -g -Wall -Wextra -ffreestanding -fno-common \
     -nostdlib -nostartfiles \
-    -Wl,--no-relax -Wl,--no-warn-rwx-segments -T "$LIB/app.ld" \
+    -Wl,--no-relax -Wl,--no-warn-rwx-segments -T "$LINKER_SCRIPT" \
     -I "$LIB" -I "$APP_DIR" \
     "$LIB/crt0.S" "$LIB/trap.S" "$LIB/soc.c" "$LIB/string.c" "${SRCS[@]}" \
     -lgcc -o "$ELF"
@@ -79,6 +82,10 @@ with open(sys.argv[2], 'w') as f:
 PY
 
 "${RISCV_PREFIX}size" "$ELF"
+
+if [ "${RUN_SIM:-1}" = "0" ]; then
+    exit 0
+fi
 
 iverilog -g2012 -o "$TBVVP" \
     "$ROOT/sim/tb_app.v" \

@@ -2,8 +2,9 @@
 
 Generates producer/consumer pairs at every pipeline distance:
 
-* load-use at distance 0/1 (producer in EX/MEM when the consumer is in ID)
-  -> ``raw_stall``; a load at distance >= 2 is read through the WB bypass,
+* TCM load-use at distance 0 (producer in EX when the consumer is in ID)
+  -> one ``raw_stall``; at distance 1 the MEM load forwards directly, and at
+  distance >= 2 the value is read through the WB bypass,
 * ALU/mul/LUI/CSR/JAL-link/div producers at EX/MEM distance -> forwarded by
   ``ex_fwd_ok``/``mem_fwd_ok`` with no stall (rtl/core.v:806-831), except a
   divisor still running (``div_busy`` freezes ID),
@@ -16,7 +17,8 @@ instruction that waits behind a stall.  ``IF_ID_hold`` and ``raw_stall``
 activity is counted to prove the load-use stall path was actually taken.
 ``raw_stall`` is load-use only: forwarding removed the ALU/mul stalls, and a
 divider is covered by ``div_busy`` (a raw_stall level, like pipe_freeze),
-so ``raw_stall`` must be at least one cycle per load-use pair.
+so ``raw_stall`` must be at least one cycle per immediately adjacent TCM
+load-use pair.
 
 Measured seeds 0/1/2: raw_stall 174/226/341, IF_ID_hold 636/490/836,
 div_busy 594/462/792.  The thresholds below use a static lower bound computed
@@ -45,9 +47,11 @@ ADDR_REG = 28
 
 
 def count_load_uses(words):
-    """Count producer/consumer pairs the RTL must stall: a load whose next or
-    second-next instruction reads its destination.  Independent of the RTL
-    stall logic (a divergence there shows up as a mismatch, not as silence)."""
+    """Count immediately adjacent TCM load/consumer pairs that must stall once.
+
+    Distance-1 consumers take the MEM forwarding value without a stall.  Decode
+    just enough to keep this bound independent of the RTL stall logic.
+    """
     # Decode just enough: opcode 0x03 = load (rd bits 11:7), ALU-immediate
     # 0x13 / register 0x33 / load 0x03 read rs1 bits 19:15, store 0x23 and
     # branch 0x63 read rs1 and rs2 bits 24:20.
@@ -68,7 +72,7 @@ def count_load_uses(words):
     for i, w in enumerate(words):
         if w & 0x7F == 0x03:
             r = rd(w)
-            if any(uses(words[i + k], r) for k in (1, 2) if i + k < len(words)):
+            if i + 1 < len(words) and uses(words[i + 1], r):
                 n += 1
     return n
 
@@ -169,10 +173,9 @@ async def hazard(dut):
     check_trace(core_pcs, ref.trace, label=f"hazard seed={seed} trace")
     h.compare_dtcm_words(ref.mem.dtcm_words(), label=f"hazard seed={seed} DTCM")
 
-    # Re-baselined for EX/MEM->ID forwarding: raw_stall no longer counts
-    # ALU/mul stalls, so the bound comes from the image itself, not from a
-    # magic >40.  Distance-0 pairs stall 2 cycles (EX+div-freeze aside),
-    # distance-1 pairs 1; require at least one per load-use pair.
+    # Ordinary TCM loads forward from MEM: distance-0 pairs stall once in EX,
+    # distance-1 pairs no longer contribute a mandatory stall.  Require one
+    # cycle per immediately adjacent pair found in the assembled image.
     expect(load_stalls["n"] >= load_uses,
            f"only {load_stalls['n']} load-use stall cycles for {load_uses} "
            f"load-use pairs; forwarding must not have swallowed load stalls")

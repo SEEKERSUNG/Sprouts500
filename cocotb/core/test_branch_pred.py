@@ -383,8 +383,8 @@ def build_stall_freeze(seed=0):
     a.li(9, 2)
     a.label("head")
     head = a.here()
-    a.lw(6, 5, 0)                       # load-use producer for the branch
     a.addi(4, 4, -1)
+    a.lw(6, 5, 0)                       # distance-0 load-use producer for bne
     bp = a.here()
     a.bne(4, 6, "head")                 # taken (4 -> 1, then 0; 6 = 0)
     a.div(12, 6, 9)                     # divider freeze behind the branch
@@ -392,6 +392,64 @@ def build_stall_freeze(seed=0):
     a.halt()
     words = a.assemble()
     return words, {"head": head, "bp": bp,
+                   "halt_pc": a.halt_store_pc, "dtcm": dtcm}
+
+
+def build_ras_calls(seed=0):
+    """Shared/nested returns use the RAS; bad targets still redirect in EX."""
+    dtcm = _zero_dtcm()
+    a = Asm()
+    _init_regs(a)
+    a.li(8, 2)
+    a.label("loop")
+    a.jal(1, "fn1")
+    a.addi(2, 2, 1)
+    a.jal(1, "fn1")                  # same return, different link value
+    a.addi(3, 3, 1)
+    a.jal(5, "fn5")                  # alternate architectural link register
+    a.addi(4, 4, 1)
+    a.addi(8, 8, -1)
+    a.bne(8, 0, "loop")
+    a.jal(1, "outer")
+    a.addi(9, 9, 1)
+    a.jal(1, "bad_fn")
+
+    a.label("fn1")
+    a.addi(7, 7, 1)
+    ret1 = a.here()
+    a.jalr(0, 1, 0)
+    a.label("fn5")
+    a.addi(10, 10, 1)
+    ret5 = a.here()
+    a.jalr(0, 5, 0)
+
+    a.label("outer")
+    a.addi(5, 1, 0)                  # save the outer link across the inner call
+    a.addi(11, 11, 1)
+    a.jal(1, "inner")
+    a.addi(12, 12, 1)
+    outer_ret = a.here()
+    a.jalr(0, 5, 0)
+    a.label("inner")
+    a.addi(13, 13, 1)
+    inner_ret = a.here()
+    a.jalr(0, 1, 0)
+
+    a.label("bad_fn")
+    a.la(1, "good")                  # RAS top is deliberately wrong
+    bad_ret = a.here()
+    a.jalr(0, 1, 0)
+    a.label("good")
+    a.la(1, "empty_target")
+    empty_ret = a.here()              # empty stack: BTB fallback, no underflow
+    a.jalr(0, 1, 0)
+    a.label("empty_target")
+    a.halt()
+    words = a.assemble()
+    return words, {"ret1": ret1, "ret5": ret5, "outer_ret": outer_ret,
+                   "inner_ret": inner_ret, "bad_ret": bad_ret,
+                   "empty_ret": empty_ret, "good": a.labels["good"],
+                   "empty_target": a.labels["empty_target"],
                    "halt_pc": a.halt_store_pc, "dtcm": dtcm}
 
 
@@ -405,6 +463,7 @@ BUILDERS = {
     "jalr_target_change": build_jalr_target_change,
     "stale_noncontrol": build_stale_noncontrol,
     "stall_freeze": build_stall_freeze,
+    "ras_calls": build_ras_calls,
 }
 
 CASES = tuple(BUILDERS)
@@ -684,13 +743,35 @@ def check_stall_freeze(h, w, pcs):
     expect(stats["pipe_freeze"] > 0,
            "stall_freeze: pipe_freeze never observed (no div)")
     expect(stats["raw_stall"] > 0, "stall_freeze: no load-use stall")
-    expect(w["held_in_id"] >= 2,
+    expect(w["held_in_id"] >= 1,
            f"stall_freeze: the branch was held in ID during only "
            f"{w['held_in_id']} stall cycle(s); the load-use stall was not "
            f"combined with the branch")
     expect(h.reg(4) == 0 and h.reg(12) == 0 and h.reg(13) == 0,
            f"stall_freeze: x4={h.reg(4)} x12={h.reg(12)} x13={h.reg(13)}, "
            f"expected 0/0/0 (6/2, 0/2)")
+
+
+def check_ras_calls(h, w, pcs):
+    for name in ("ret1", "ret5", "outer_ret", "inner_ret"):
+        at = w["watcher"].at(w[name])
+        expect(at == [],
+               f"ras_calls: {name} at 0x{w[name]:08x} mispredicted: {at}; "
+               "a nonempty RAS must predict shared/nested returns")
+    bad = w["watcher"].at(w["bad_ret"])
+    expect(len(bad) == 1 and bad[0][2] == 1 and bad[0][3] == 1 and
+           bad[0][4] == w["good"],
+           f"ras_calls: bad return target was not corrected once in EX: {bad}")
+    empty = w["watcher"].at(w["empty_ret"])
+    expect(len(empty) == 1 and empty[0][4] == w["empty_target"],
+           f"ras_calls: empty-stack return must use the normal BTB/EX path: {empty}")
+    expect(int(h.core.ras_count.value) == 0,
+           f"ras_calls: final RAS count={int(h.core.ras_count.value)}, expected 0")
+    expect(h.reg(2) == 2 and h.reg(3) == 2 and h.reg(4) == 2 and h.reg(7) == 4,
+           f"ras_calls: call-site results x2={h.reg(2)} x3={h.reg(3)} "
+           f"x4={h.reg(4)} x7={h.reg(7)}, expected 2/2/2/4")
+    expect(h.reg(9) == 1 and h.reg(10) == 2 and h.reg(12) == 1 and h.reg(13) == 1,
+           "ras_calls: nested/x5 function bodies did not retire exactly as expected")
 
 
 # ---------------------------------------------------------------------------
@@ -820,11 +901,10 @@ async def _case_interrupt_no_train(dut):
     st = {"bubbles": 0, "raised": False}
 
     def hook(hh):
-        # Raise the timer IRQ while the branch is held in ID behind its load
-        # (EX is a bubble): the branch then enters EX with irq_pending
-        # combinationally high and is the instruction the trap interrupts.
-        if not st["raised"] and hh.raw_stall and not hh.EX_valid \
-                and hh.ID_PC == bp:
+        # Raise the timer IRQ while the MEM load forwards to the branch in ID;
+        # the branch enters EX on the following cycle with irq_pending high.
+        if not st["raised"] and hh.MEM_valid and hh.MEM_mem_read \
+                and not hh.raw_stall and hh.ID_PC == bp:
             st["bubbles"] += 1
             if st["bubbles"] >= 2:
                 st["raised"] = True
@@ -914,6 +994,12 @@ async def _case_stall_freeze(dut):
     check_stall_freeze(h, w, w["pcs"])
 
 
+async def _case_ras_calls(dut):
+    words, info = build_ras_calls(0)
+    h, w = await _run_ref(dut, "ras_calls", words, info)
+    check_ras_calls(h, w, w["pcs"])
+
+
 _RUNNERS = {
     "loop_taken": _case_loop_taken,
     "alternating": _case_alternating,
@@ -924,6 +1010,7 @@ _RUNNERS = {
     "jalr_target_change": _case_jalr_target_change,
     "stale_noncontrol": _case_stale_noncontrol,
     "stall_freeze": _case_stall_freeze,
+    "ras_calls": _case_ras_calls,
 }
 
 

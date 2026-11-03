@@ -15,9 +15,11 @@
 //   0x2..0xFxxx: external simple bus
 
 module core #(
-    parameter [31:0] RESET_PC   = 32'h0000_0000,
-    parameter        ITCM_WORDS = 8192,
-    parameter        DTCM_WORDS = 4096
+    parameter [31:0] RESET_PC        = 32'h0000_0000,
+    parameter        ITCM_WORDS      = 8192,
+    parameter        DTCM_WORDS      = 4096,
+    parameter [31:0] ITCM_BOOT_BYTES = 32'd0,
+    parameter        ITCM_INIT_FILE  = ""
 )(
     input  wire        clk,
     input  wire        rstn,
@@ -73,6 +75,14 @@ module core #(
     reg [31:0] ITCM [0:ITCM_WORDS-1];
     reg [31:0] DTCM [0:DTCM_WORDS-1];
 
+    // FPGA configurations can initialize a resident UART bootloader directly
+    // from the bitstream.  The empty default leaves all existing simulators in
+    // charge of loading ITCM through their testbenches.
+    initial begin
+        if (ITCM_INIT_FILE != "")
+            $readmemh(ITCM_INIT_FILE, ITCM);
+    end
+
     reg [31:0] if_rdata_q;
     reg [31:0] mem_itcm_rdata_q;
     reg [31:0] mem_dtcm_rdata_q;
@@ -98,6 +108,35 @@ module core #(
     reg [1:0]            btb_cnt    [0:BTB_NUM-1];
     reg [BTB_NUM-1:0]    btb_valid;
 
+    // Four-entry return-address stack.  It is updated only by real instructions
+    // in EX, never by speculative IF/ID instructions, so a redirect cannot
+    // leave wrong-path pushes or pops behind.  The top is always entry 0.
+    reg [31:0] ras_stack [0:3];
+    reg [2:0]  ras_count;
+
+    // Return {count, s0, s1, s2, s3} after one older in-flight operation.
+    // Used only to predict the current IF return; architectural state is still
+    // updated in EX.  A flushed older operation also flushes this IF consumer.
+    function [130:0] ras_step;
+        input [2:0]  count;
+        input [31:0] s0, s1, s2, s3;
+        input [31:0] link;
+        input        is_call, is_return;
+        reg [2:0] c;
+        reg [31:0] t0, t1, t2, t3;
+        begin
+            c = count; t0 = s0; t1 = s1; t2 = s2; t3 = s3;
+            if (is_call) begin
+                t3 = s2; t2 = s1; t1 = s0; t0 = link;
+                c = (count == 3'd4) ? 3'd4 : count + 3'd1;
+            end else if (is_return && (count != 0)) begin
+                t0 = s1; t1 = s2; t2 = s3;
+                c = count - 3'd1;
+            end
+            ras_step = {c, t0, t1, t2, t3};
+        end
+    endfunction
+
     //--------------------------------------------------------------------------
     // IF
     //--------------------------------------------------------------------------
@@ -122,12 +161,48 @@ module core #(
     wire        if_insn_compressed = if_cur_compressed;
     wire [31:0] if_insn_pc         = IF_PC_q;
 
+    // RVC has already been expanded, so this also covers C.JR/C.JALR.  A RAS
+    // hit overrides the BTB for returns; an empty stack falls back to the BTB.
+    wire if_is_jalr = (if_insn_ir[6:0] == OP_JALR) && (if_insn_ir[14:12] == 3'b000);
+    wire if_is_return = if_is_jalr && (if_insn_ir[11:7] == 5'd0) &&
+                        ((if_insn_ir[19:15] == 5'd1) || (if_insn_ir[19:15] == 5'd5)) &&
+                        (if_insn_ir[31:20] == 12'd0);
+    // Forward the effects of older in-flight operations (EX, then ID) so a
+    // short function's return sees its call even though the RAS commits in EX.
+    wire ex_ras_call_any = EX_valid && EX_jump &&
+                           ((EX_opcode == OP_JAL) ||
+                            ((EX_opcode == OP_JALR) && (EX_funct3 == 3'b000))) &&
+                           ((EX_rd == 5'd1) || (EX_rd == 5'd5));
+    wire ex_ras_return_any = EX_valid && EX_jump && (EX_opcode == OP_JALR) &&
+                             (EX_funct3 == 3'b000) && (EX_rd == 5'd0) &&
+                             ((EX_rs1 == 5'd1) || (EX_rs1 == 5'd5)) &&
+                             (EX_imm == 32'd0);
+    wire id_ras_call_any = ID_valid &&
+                           ((id_opcode == OP_JAL) ||
+                            ((id_opcode == OP_JALR) && (id_funct3 == 3'b000))) &&
+                           ((id_rd == 5'd1) || (id_rd == 5'd5));
+    wire id_ras_return_any = ID_valid && (id_opcode == OP_JALR) &&
+                             (id_funct3 == 3'b000) && (id_rd == 5'd0) &&
+                             ((id_rs1 == 5'd1) || (id_rs1 == 5'd5)) &&
+                             (id_ir[31:20] == 12'd0);
+    wire [130:0] ras_ex_view = ras_step(ras_count, ras_stack[0], ras_stack[1],
+                                        ras_stack[2], ras_stack[3], EX_PC + ex_insn_len,
+                                        ex_ras_call_any, ex_ras_return_any);
+    wire [130:0] ras_if_view = ras_step(ras_ex_view[130:128], ras_ex_view[127:96],
+                                        ras_ex_view[95:64], ras_ex_view[63:32],
+                                        ras_ex_view[31:0],
+                                        ID_PC + (ID_is_compressed ? 32'd2 : 32'd4),
+                                        id_ras_call_any, id_ras_return_any);
+    wire        if_ras_hit = if_is_return && (ras_if_view[130:128] != 0);
+    wire        if_pred_taken_eff = if_ras_hit ? 1'b1 : IF_pred_taken_q;
+    wire [31:0] if_pred_target_eff = if_ras_hit ? ras_if_view[127:96] : IF_pred_target_q;
+
     wire        if_hold = pipe_freeze || raw_stall || bus_conflict || mem_amo_active ||
                           id_flush_q;
     wire [31:0] IF_PC =
         redirect ? redirect_pc :
         if_hold ? IF_PC_q :
-        IF_pred_taken_q ? IF_pred_target_q :
+        if_pred_taken_eff ? if_pred_target_eff :
         IF_PC_q + (if_cur_compressed ? 32'd2 : 32'd4);
 
     wire [BTB_IBITS-1:0]  if_pc_index = IF_PC[BTB_IBITS:1];
@@ -166,8 +241,8 @@ module core #(
     wire [31:0] id_capture_pc = IF_ID_hold ? IF_ID_PC_hold : if_insn_pc;
     wire        id_capture_compressed = IF_ID_hold ? IF_ID_compressed_hold :
                                         if_insn_compressed;
-    wire        id_capture_pred_taken  = IF_ID_hold ? IF_ID_pred_taken_hold  : IF_pred_taken_q;
-    wire [31:0] id_capture_pred_target = IF_ID_hold ? IF_ID_pred_target_hold : IF_pred_target_q;
+    wire        id_capture_pred_taken  = IF_ID_hold ? IF_ID_pred_taken_hold  : if_pred_taken_eff;
+    wire [31:0] id_capture_pred_target = IF_ID_hold ? IF_ID_pred_target_hold : if_pred_target_eff;
 
     wire [31:0] id_ir = ID_valid ? ID_IR : NOP;
 
@@ -1362,7 +1437,11 @@ module core #(
     wire mem_we_any     = mem_normal_we || mem_amo_we;
     wire [31:0] mem_wdata_eff = mem_amo_we ? mem_amo_new : MEM_wdata;
     wire [3:0]  mem_wstrb_eff = mem_amo_we ? 4'hf : MEM_wstrb;
-    wire mem_itcm_we    = mem_we_any && (MEM_addr[31:28] == 4'h0);
+    // Writes below the configured boot boundary are ignored.  This also gates
+    // the same-cycle store/load merge, so a rejected store can never become
+    // visible speculatively through the MEM forwarding path.
+    wire mem_itcm_we    = mem_we_any && (MEM_addr[31:28] == 4'h0) &&
+                          ((ITCM_BOOT_BYTES == 0) || (MEM_addr >= ITCM_BOOT_BYTES));
     wire mem_dtcm_we    = mem_we_any && (MEM_addr[31:28] == 4'h1);
 
     reg        lr_resv_valid;
@@ -1444,70 +1523,116 @@ module core #(
                               ((EX_pred_taken && !ex_ctrl_actual) ?
                                (EX_PC + ex_insn_len) : ex_target);
 
+    // Commit RAS operations only when the EX instruction really advances.  A
+    // mispredicted return still pops (the return itself is on the correct path);
+    // a trap cancels its EX instruction.  Trap/mret clear the predictor because
+    // the handler may reuse the architectural link registers on another path.
+    wire ras_ex_advance = EX_valid && EX_jump && !trap_taken &&
+                          !pipe_freeze && !mem_amo_active;
+    wire ras_ex_call = ras_ex_advance &&
+                       ((EX_opcode == OP_JAL) ||
+                        ((EX_opcode == OP_JALR) && (EX_funct3 == 3'b000))) &&
+                       ((EX_rd == 5'd1) || (EX_rd == 5'd5));
+    wire ras_ex_return = ras_ex_advance && (EX_opcode == OP_JALR) &&
+                         (EX_funct3 == 3'b000) && (EX_rd == 5'd0) &&
+                         ((EX_rs1 == 5'd1) || (EX_rs1 == 5'd5)) &&
+                         (EX_imm == 32'd0) && (ras_count != 0);
+
+    always @(posedge clk) begin
+        if (!rstn) begin
+            ras_count <= 3'd0;
+        end else if (trap_taken || mret_taken) begin
+            ras_count <= 3'd0;
+        end else if (ras_ex_call) begin
+            ras_stack[3] <= ras_stack[2];
+            ras_stack[2] <= ras_stack[1];
+            ras_stack[1] <= ras_stack[0];
+            ras_stack[0] <= EX_PC + ex_insn_len;
+            ras_count <= (ras_count == 3'd4) ? 3'd4 : ras_count + 3'd1;
+        end else if (ras_ex_return) begin
+            ras_stack[0] <= ras_stack[1];
+            ras_stack[1] <= ras_stack[2];
+            ras_stack[2] <= ras_stack[3];
+            ras_count <= ras_count - 3'd1;
+        end
+    end
+
     // register file
     reg [31:0] regfiles [0:31];
     reg [31:0] wb_rd_data;
 
-    wire [31:0] wb_raw_data = (WB_load_src == 2'd1) ? mem_itcm_rdata_q :
-                              (WB_load_src == 2'd2) ? mem_dtcm_rdata_q :
-                              (WB_load_src == 2'd3) ? bus_rdata_q : 32'b0;
-
-    always @(*) begin
-        wb_rd_data = WB_result;
-        if (WB_load_src != 2'd0) begin
-            case (WB_load_size)
+    function [31:0] load_expand;
+        input [31:0] raw;
+        input [2:0]  size;
+        input        uns;
+        input [1:0]  addr_low;
+        begin
+            case (size)
                 3'd1: begin
-                    case (WB_addr_low)
-                        2'b00: wb_rd_data = WB_load_unsigned ? {24'b0, wb_raw_data[7:0]}  : {{24{wb_raw_data[7]}},  wb_raw_data[7:0]};
-                        2'b01: wb_rd_data = WB_load_unsigned ? {24'b0, wb_raw_data[15:8]} : {{24{wb_raw_data[15]}}, wb_raw_data[15:8]};
-                        2'b10: wb_rd_data = WB_load_unsigned ? {24'b0, wb_raw_data[23:16]} : {{24{wb_raw_data[23]}}, wb_raw_data[23:16]};
-                        default: wb_rd_data = WB_load_unsigned ? {24'b0, wb_raw_data[31:24]} : {{24{wb_raw_data[31]}}, wb_raw_data[31:24]};
+                    case (addr_low)
+                        2'b00: load_expand = uns ? {24'b0, raw[7:0]}  : {{24{raw[7]}},  raw[7:0]};
+                        2'b01: load_expand = uns ? {24'b0, raw[15:8]} : {{24{raw[15]}}, raw[15:8]};
+                        2'b10: load_expand = uns ? {24'b0, raw[23:16]} : {{24{raw[23]}}, raw[23:16]};
+                        default: load_expand = uns ? {24'b0, raw[31:24]} : {{24{raw[31]}}, raw[31:24]};
                     endcase
                 end
                 3'd2: begin
-                    if (WB_addr_low[1])
-                        wb_rd_data = WB_load_unsigned ? {16'b0, wb_raw_data[31:16]} : {{16{wb_raw_data[31]}}, wb_raw_data[31:16]};
+                    if (addr_low[1])
+                        load_expand = uns ? {16'b0, raw[31:16]} : {{16{raw[31]}}, raw[31:16]};
                     else
-                        wb_rd_data = WB_load_unsigned ? {16'b0, wb_raw_data[15:0]}  : {{16{wb_raw_data[15]}}, wb_raw_data[15:0]};
+                        load_expand = uns ? {16'b0, raw[15:0]}  : {{16{raw[15]}}, raw[15:0]};
                 end
-                default: wb_rd_data = wb_raw_data;
+                default: load_expand = raw;
             endcase
         end
+    endfunction
+
+    wire [31:0] mem_load_raw = (MEM_load_src == 2'd1) ? mem_itcm_rdata_q :
+                               (MEM_load_src == 2'd2) ? mem_dtcm_rdata_q : 32'b0;
+    wire [31:0] mem_load_data = load_expand(mem_load_raw, MEM_mem_size,
+                                             MEM_mem_unsigned, MEM_addr[1:0]);
+    wire [31:0] wb_raw_data = (WB_load_src == 2'd3) ? bus_rdata_q : WB_result;
+
+    always @(*) begin
+        wb_rd_data = (WB_load_src != 2'd0) ?
+                     load_expand(wb_raw_data, WB_load_size,
+                                 WB_load_unsigned, WB_addr_low) : WB_result;
     end
 
     // Read operands with EX/MEM->ID forwarding, then the WB bypass, and x0
     // hardwired ahead of all of them.  EX is younger than MEM, so EX wins.
-    // Load producers are never forwarded: their data is only registered at the
-    // MEM->WB edge (mem_*_rdata_q / bus_rdata_q), so raw_stall covers them.
-    // A divider in EX has ex_result == 0 until DIV_DONE (div_busy freezes ID
-    // before that point, but gate explicitly).
-    // AMO/LR/SC results are only available at MEM/WB (old memory word or SC
-    // status), exactly like loads; they are never forwarded from EX/MEM.
+    // A normal TCM load read is captured at EX->MEM and can forward from MEM;
+    // bus loads and AMO/LR/SC still wait for WB.  A divider in EX has
+    // ex_result == 0 until DIV_DONE and is explicitly excluded.
     wire ex_fwd_ok  = EX_valid && EX_rd_write_req && !EX_mem_read && !EX_amo &&
                       !(ex_is_div && (div_state != DIV_DONE));
     wire mem_fwd_ok = MEM_valid && MEM_rd_write_req && !MEM_mem_read && !MEM_amo;
+    wire mem_load_fwd_ok = MEM_valid && MEM_rd_write_req && MEM_mem_read &&
+                           !MEM_amo && !pipe_freeze && !mem_amo_active &&
+                           ((MEM_load_src == 2'd1) || (MEM_load_src == 2'd2));
+    wire mem_fwd_any = mem_fwd_ok || mem_load_fwd_ok;
+    wire [31:0] mem_fwd_data = mem_load_fwd_ok ? mem_load_data : MEM_result;
 
     wire [31:0] id_rs1_data = (id_rs1 == 5'd0) ? 32'b0 :
                               (ex_fwd_ok  && (EX_rd  != 5'd0) && (EX_rd  == id_rs1)) ? ex_result :
-                              (mem_fwd_ok && (MEM_rd != 5'd0) && (MEM_rd == id_rs1)) ? MEM_result :
+                              (mem_fwd_any && (MEM_rd != 5'd0) && (MEM_rd == id_rs1)) ? mem_fwd_data :
                               (WB_valid && WB_rd_write_req && (WB_rd == id_rs1)) ?
                               wb_rd_data : regfiles[id_rs1];
     wire [31:0] id_rs2_data = (id_rs2 == 5'd0) ? 32'b0 :
                               (ex_fwd_ok  && (EX_rd  != 5'd0) && (EX_rd  == id_rs2)) ? ex_result :
-                              (mem_fwd_ok && (MEM_rd != 5'd0) && (MEM_rd == id_rs2)) ? MEM_result :
+                              (mem_fwd_any && (MEM_rd != 5'd0) && (MEM_rd == id_rs2)) ? mem_fwd_data :
                               (WB_valid && WB_rd_write_req && (WB_rd == id_rs2)) ?
                               wb_rd_data : regfiles[id_rs2];
 
-    // Hazard: only load producers cannot be forwarded, so only they stall ID.
-    // A load in EX is caught by id_dep_ex, one in MEM by id_dep_mem; the data
-    // is then available through the WB bypass two cycles later (load-use).
+    // Hazard: a load in EX always stalls once.  In MEM, only bus loads and
+    // AMO/LR/SC still stall; ordinary TCM loads use the MEM bypass above.
     wire id_dep_ex = ID_valid && EX_valid && EX_rd_write_req && (EX_rd != 5'd0) &&
                      (EX_mem_read || EX_amo ||
                       (ex_is_div && (div_state != DIV_DONE))) &&
                      ((dec_uses_rs1 && (id_rs1 == EX_rd)) ||
                       (dec_uses_rs2 && (id_rs2 == EX_rd)));
     wire id_dep_mem = ID_valid && MEM_valid && MEM_rd_write_req &&
-                      (MEM_mem_read || MEM_amo) &&
+                      (MEM_amo || (MEM_mem_read && !mem_load_fwd_ok)) &&
                       (MEM_rd != 5'd0) &&
                       ((dec_uses_rs1 && (id_rs1 == MEM_rd)) ||
                        (dec_uses_rs2 && (id_rs2 == MEM_rd)));
@@ -1562,6 +1687,7 @@ module core #(
 
     integer i_itcm;
     integer i_dtcm;
+    integer i_tcm_rd;
     integer i_btb;
 
     always @(posedge clk) begin
@@ -1588,8 +1714,25 @@ module core #(
     always @(posedge clk) begin
         if_rdata_q       <= ITCM[IF_PC[ITCM_AW+1:2]];
         if_rdata_hi_q    <= ITCM[IF_PC[ITCM_AW+1:2] + 1'b1];
-        mem_itcm_rdata_q <= ITCM[MEM_addr[ITCM_AW+1:2]];
-        mem_dtcm_rdata_q <= DTCM[MEM_addr[DTCM_AW+1:2]];
+        // Read the EX address so the word is usable during the MEM cycle.
+        // If an older store commits at this same edge, merge its byte lanes:
+        // an inferred array would otherwise return the pre-store word.
+        if (!pipe_freeze && !mem_amo_active) begin
+            for (i_tcm_rd = 0; i_tcm_rd < 4; i_tcm_rd = i_tcm_rd + 1) begin
+                if (mem_itcm_we && (MEM_addr[31:2] == EX_addr[31:2]) &&
+                    mem_wstrb_eff[i_tcm_rd])
+                    mem_itcm_rdata_q[i_tcm_rd*8 +: 8] <= mem_wdata_eff[i_tcm_rd*8 +: 8];
+                else
+                    mem_itcm_rdata_q[i_tcm_rd*8 +: 8] <=
+                        ITCM[EX_addr[ITCM_AW+1:2]][i_tcm_rd*8 +: 8];
+                if (mem_dtcm_we && (MEM_addr[31:2] == EX_addr[31:2]) &&
+                    mem_wstrb_eff[i_tcm_rd])
+                    mem_dtcm_rdata_q[i_tcm_rd*8 +: 8] <= mem_wdata_eff[i_tcm_rd*8 +: 8];
+                else
+                    mem_dtcm_rdata_q[i_tcm_rd*8 +: 8] <=
+                        DTCM[EX_addr[DTCM_AW+1:2]][i_tcm_rd*8 +: 8];
+            end
+        end
     end
 
     always @(posedge clk) begin
@@ -1726,8 +1869,8 @@ module core #(
                 IF_ID_IR_hold <= id_capture_ir;
                 IF_ID_PC_hold <= id_capture_pc;
                 IF_ID_compressed_hold <= id_capture_compressed;
-                IF_ID_pred_taken_hold  <= IF_pred_taken_q;
-                IF_ID_pred_target_hold <= IF_pred_target_q;
+                IF_ID_pred_taken_hold  <= if_pred_taken_eff;
+                IF_ID_pred_target_hold <= if_pred_target_eff;
                 IF_ID_hold    <= 1'b1;
             end
         end else begin
@@ -1981,7 +2124,9 @@ module core #(
             WB_valid         <= MEM_valid;
             WB_rd            <= MEM_rd;
             WB_rd_write_req  <= MEM_rd_write_req;
-            WB_result        <= MEM_result;
+            WB_result        <= (MEM_mem_read &&
+                                 ((MEM_load_src == 2'd1) || (MEM_load_src == 2'd2))) ?
+                                mem_load_raw : MEM_result;
             WB_load_size     <= MEM_mem_size;
             WB_load_unsigned <= MEM_mem_unsigned;
             WB_addr_low      <= MEM_addr[1:0];

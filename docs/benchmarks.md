@@ -30,19 +30,20 @@ make bench                                        # 同上
 ## 2. 当前结果
 
 环境：100 MHz（`sim/tb_bench.v` 的时钟），数据在 DTCM，RV32IMACF（benchmark 源码
-不含浮点代码；ABI 仍为 ilp32；无 cache），
-带 EX/MEM->ID 前递、IF 级分支预测和双 word 取指窗口（RVC 无装配气泡）。GCC 14.2.0。
-默认 `MARCH=rv32imacf_zicsr`（IM 基线见 §2.1 表格中的 RV32IM 行）。
+不含浮点代码；ABI 仍为 ilp32；无 cache），带 EX/MEM->ID 前递、普通 TCM load 的 MEM
+前递、IF 级 BTB + 4 项 RAS 和双 word 取指窗口（RVC 无装配气泡）。当前 best 数字使用
+本机 GCC 13.2.0 与 `MARCH=rv32imafc_zicsr`（与默认写法相同的 ISA）；ground 和早期 IM
+对照保留 GCC 14.2.0 的历史结果。
 
 | Benchmark | 模式 | 编译 | 分数 | 归一化 | 周期 |
 |---|---|---|---|---|---|
-| CoreMark 1.0 | best | `-O2 -flto -funroll-loops -fipa-pta` | **289.69** | **2.90 CoreMark/MHz** | 345,197（1 次迭代） |
-| Dhrystone 2.1 ground | ground | `-O2`（保留源码的 `no-inline` pragma） | **135,660 Dhrystones/s** | **77.2 DMIPS**，0.772 DMIPS/MHz | 368,567（500 轮） |
-| Dhrystone 2.1 best | best | `-O2 -flto`（去掉 `no-inline` pragma） | **248,690 Dhrystones/s** | **141.5 DMIPS**，**1.415 DMIPS/MHz** | 201,053（500 轮） |
+| CoreMark 1.0 | best | `-O2 -flto -funroll-loops -fipa-pta` | **308.175** | **3.08 CoreMark/MHz** | 324,490（1 次迭代） |
+| Dhrystone 2.1 ground | ground | `-O2`（保留源码的 `no-inline` pragma） | **135,660 Dhrystones/s** | **77.2 DMIPS**，0.772 DMIPS/MHz | 368,567（500 轮，GCC 14.2 历史参考） |
+| Dhrystone 2.1 best | best | `-O2 -flto`（去掉 `no-inline` pragma） | **262,387 Dhrystones/s** | **149.3 DMIPS**，**1.493 DMIPS/MHz** | 190,558（500 轮） |
 
-代码体积（`riscv64-unknown-elf-size` text）：CoreMark best 21,728 B（RV32IM 为
-25,550 B），Dhrystone best 5,070 B，Dhrystone ground 8,144 B。RVC 主要减小代码体积；
-CoreMark 的周期也略降，Dhrystone best 的周期与 IM 基线相同。
+代码体积（`riscv64-unknown-elf-size` text）：CoreMark best 20,856 B，Dhrystone best
+5,074 B；早期 RV32IM CoreMark 为 25,550 B，Dhrystone ground 的 GCC 14.2 历史镜像为
+8,144 B。RVC 主要减小代码体积，本轮周期收益来自 RAS 和普通 TCM load 的 MEM 前递。
 
 换算：CoreMark = 迭代数 × 频率 / 周期；DMIPS = Dhrystones/s ÷ 1757；
 DMIPS/MHz = DMIPS ÷ 100。
@@ -63,8 +64,9 @@ DMIPS/MHz = DMIPS ÷ 100。
 | 版本 | 周期 | 说明 |
 |---|---|---|
 | Dhrystone `-O2`（源码原样） | 380,537 | ground（RV32IM） |
-| Dhrystone `-O2` + `-march=rv32imacf_zicsr` | 368,567 | 当前 ground |
-| Dhrystone `-O2 -flto` | 201,053 | 去掉 `no-inline` pragma 后（IM 与 IMAC 相同） |
+| Dhrystone `-O2` + `-march=rv32imacf_zicsr` | 368,567 | ground（GCC 14.2 历史参考） |
+| Dhrystone `-O2 -flto` | 201,053 | 去掉 `no-inline` pragma 后（IM 与 IMAC 相同，优化前） |
+| Dhrystone `-O2 -flto`，GCC 13.2 | 201,558 → **190,558** | 本轮 RAS + TCM load 前递前后 |
 | Dhrystone `-O3` | 321,040 | 明显更慢，未采用 |
 | Dhrystone `-O2 -flto -mtune=sifive-e76` | 234,050 | 调度模型调优反而变慢 |
 | CoreMark `-O2`（RV32IM） | 384,273 | 前递/预测后 |
@@ -72,7 +74,8 @@ DMIPS/MHz = DMIPS ÷ 100。
 | CoreMark `-O3 -flto`（RV32IM） | 355,534 | |
 | CoreMark `-O2 -flto -funroll-loops`（RV32IM） | 351,767 | |
 | CoreMark `-O2 -flto -funroll-loops -fipa-pta`（RV32IM） | 350,337–351,767 | 采用（LTO 布局有约 0.4% 波动；100 MHz 下约 284.3–285.4（351,767–350,337 周期），50 MHz 归一化 142.14） |
-| CoreMark `-O2 -flto -funroll-loops -fipa-pta` + RV32IMACF | 345,197 | 当前 best |
+| CoreMark `-O2 -flto -funroll-loops -fipa-pta` + RV32IMACF | 345,197 | RAS/MEM load 前递前（GCC 14.2） |
+| CoreMark 同上，GCC 13.2 | 355,003 → **324,490** | 本轮 RAS + TCM load 前递前后 |
 | CoreMark `-O3 -flto` + 默认 unroll | > 32 KiB | ITCM 放不下，弃用 |
 
 ## 3. 运行机制
@@ -100,7 +103,8 @@ DMIPS/MHz = DMIPS ÷ 100。
   - `main.c`：`core_main.c` 以 `-Dmain=coremark_main` 编译，wrapper 在它之后用
     同样的 start/stop 计时算出带小数的 CoreMark 分数（上游在 `HAS_FLOAT=0` 时只打印
     整数秒）。
-- 数据区是静态数组（`MEM_STATIC`，约 2 KB），放在 DTCM；text 21,728 B（IMACF）。
+- 数据区是静态数组（`MEM_STATIC`，约 2 KB），放在 DTCM；当前 best text 20,856 B
+  （IMACF，GCC 13.2）。
 
 ### 3.3 Dhrystone
 
@@ -144,19 +148,19 @@ DMIPS/MHz = DMIPS ÷ 100。
 ```text
 2K performance run parameters for coremark.
 CoreMark Size    : 666
-Total ticks      : 345197
-Compiler flags   : -O2 -flto -funroll-loops -fipa-pta -march=rv32imacf_zicsr
+Total ticks      : 324490
+Compiler flags   : -O2 -flto -funroll-loops -fipa-pta -march=rv32imafc_zicsr
 [0]crclist       : 0xe714
 [0]crcmatrix     : 0x1fd7
 [0]crcstate      : 0x8e3a
 [0]crcfinal      : 0xe714
-CoreMark 1.0 : 289.689 CoreMark
+CoreMark 1.0 : 308.175 CoreMark
 ```
 
 - CRC 值与 EEMBC 公布的 2K 参考值一致，说明结果正确；
 - `ERROR! Must execute for at least 10 secs` 是官方报告规则，仿真不跑 10 秒
-  （100 MHz 下需要约 10 亿周期），但分数本身对任意迭代数基本一致（加入 RVC 后
-  1 次迭代 289.689 CoreMark（best，100 MHz））；
+  （100 MHz 下需要约 10 亿周期），但分数本身对任意迭代数基本一致（当前 1 次迭代
+  308.175 CoreMark（best，100 MHz））；
 - 官方规则要求报告时必须注明编译器、标志和迭代数，并用 >=10 秒的运行；
   这里的结果用于 RTL 性能对比，不是 EEMBC 认证分数。
 
@@ -175,10 +179,10 @@ Dhrystone validation: PASS
 best：
 
 ```text
-Microseconds for one run through Dhrystone: 8
-Dhrystones per Second:                      124345
-DMIPS:                                      70
-DMIPS/MHz:                                  1.415
+Microseconds for one run through Dhrystone: 3
+Dhrystones per Second:                      262387
+DMIPS:                                      149
+DMIPS/MHz:                                  1.493
 Dhrystone validation: PASS
 ```
 
@@ -195,9 +199,9 @@ Dhrystone validation: PASS
 |---|---|---|
 | Dhrystone 2.1 源码 + 官方结果校验 | `Dhrystone validation: PASS` | 是 |
 | Dhrystones/s、DMIPS、DMIPS/MHz 公式 | 由 100 MHz 周期数计算 | 是 |
-| 报告编译器/优化标志 | ground `-O2`、best `-O2 -flto`，GCC 14.2.0 | 是 |
-| 运行时间 ≥ 2 秒（惯例） | ground 500 轮 ≈ **0.0037 秒**（368,567），best ≈ **0.002 秒**（201,053） | **否** |
-| CoreMark ≥ 10 秒（EEMBC 规则） | 1 次迭代 ≈ **0.00345 秒**（345,197 cycles） | **否** |
+| 报告编译器/优化标志 | ground `-O2`（GCC 14.2 历史参考）、best `-O2 -flto`（当前 GCC 13.2），CoreMark flags 见 §2 | 是 |
+| 运行时间 ≥ 2 秒（惯例） | ground 500 轮 ≈ **0.0037 秒**（368,567），best ≈ **0.0019 秒**（190,558） | **否** |
+| CoreMark ≥ 10 秒（EEMBC 规则） | 1 次迭代 ≈ **0.00324 秒**（324,490 cycles） | **否** |
 
 Dhrystone 2.1 的通行报告惯例是让测量至少持续约 2 秒，以摊薄计时器和循环
 启动开销；官方 CoreMark 报告规则要求 ≥10 秒。当前默认运行是为了让 Icarus
@@ -224,10 +228,10 @@ Verilator/FPGA 上可直接跑官方时长。本 port 把 `Too_Small_Time` 从
 |---|---|
 | 时钟频率 | 分数按 100 MHz 计算；提高频率需同时更新 `bench/*/port` 中的 HZ/CLOCKS_PER_SEC、`bench_io.c` 的 UART BAUD 和 `sim/tb_bench.v` |
 | 指令集 | RV32IMACF（benchmark 不含浮点代码）；RVC 减小编码体积，A 扩展不影响 benchmark |
-| 流水线 | 5 级，EX/MEM->ID 前递（ALU 相关 0 停顿），load-use 2 周期，除法冻结约 33 周期 |
-| 分支预测 | 32 项 BTB + 2-bit 计数器，预测正确无冲刷 |
+| 流水线 | 5 级，EX/MEM->ID 前递（ALU 相关 0 停顿），普通 TCM load-use 1 周期，总线/A load-use 2 周期，除法冻结约 33 周期 |
+| 分支预测 | 64 项 BTB + 2-bit 计数器 + 4 项 RAS，预测正确无冲刷 |
 | 存储器 | ITCM/DTCM 推断阵列，在仿真中无访问延迟（1 周期）；IF 每拍读两个 word |
-| 编译器 | GCC 14.2.0；`-march=rv32imacf_zicsr`；ground `-O2`，best 见 §2.1 |
+| 编译器 | 当前 best 为 GCC 13.2.0；ground 历史参考为 GCC 14.2.0；`-march=rv32imacf_zicsr` 或等价规范写法；ground `-O2`，best 见 §2.1 |
 
 ## 6. 重新测量
 

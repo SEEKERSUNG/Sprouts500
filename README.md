@@ -14,12 +14,13 @@
 |---|---|
 | ISA 测试 | RV32I 38 + RV32M 8 + RV32C 27（`riscv-arch-test` 2.x）**73/73**；RV32A 定向 3/3；RV32F 146/146；合计 **222/222**（Ubuntu 26.04，GCC 14.2，Icarus 12） |
 | SoC demo：UART hello + 定时器中断 + GPIO | 通过（Ubuntu 26.04） |
-| cocotb 随机/定向验证 | SoC/外设 72 项 + core 微架构 77 项（含 RVC、RV32A、RV32F 集成），全部通过 |
+| FPGA UART Bootloader | 2 KiB 驻留 Boot、低有效 BOOT0（GPIO[0]）、分帧/CRC32 下载；协议单测 + 端到端仿真 `BOOT_TEST_PASS` |
+| cocotb 随机/定向验证 | SoC/外设 72 项 + core 微架构 78 项（含 RVC、RV32A、RV32F 集成），全部通过 |
 | riscv-dv + Sail 指令级随机 | 3 个 RV32IM 随机种子 + 定向陷阱 + 定向 A + 定向 C lockstep，6/6 通过 |
 | Yosys + Nangate45 门级综合 | Yosys 0.52，ABC `-fast`，2-word TCM 时序配置 + 驱动强度提升 |
-| OpenSTA 时序 | **100 MHz pre-CTS MET**：setup +3.251 ns，hold +0.083 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟，96,409 门） |
-| CoreMark 1.0 | best（RV32IMACF，benchmark 不含浮点）**289.69**（**2.90 CoreMark/MHz**，100 MHz）；RV32IM 基线 284.3（351,767 周期） |
-| Dhrystone 2.1 | ground **135,660 Dhrystones/s**（**77.2 DMIPS**，0.772 DMIPS/MHz）；best **248,690 Dhrystones/s**（**141.5 DMIPS**，**1.415 DMIPS/MHz**） |
+| OpenSTA 时序 | **100 MHz pre-CTS MET**：setup +3.241 ns，hold +0.083 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟，99,875 单元） |
+| CoreMark 1.0 | best（RV32IMACF，benchmark 不含浮点，GCC 13.2）**308.175**（**3.08 CoreMark/MHz**，324,490 周期，100 MHz）；RV32IM 历史基线 284.3（351,767 周期） |
+| Dhrystone 2.1 | ground **135,660 Dhrystones/s**（**77.2 DMIPS**，0.772 DMIPS/MHz，GCC 14.2 参考）；best **262,387 Dhrystones/s**（**149.3 DMIPS**，**1.493 DMIPS/MHz**，GCC 13.2） |
 
 原始单体 core 保存在 `archive/core_v1.v`。
 
@@ -74,6 +75,22 @@ bash scripts/synth.sh && bash scripts/sta.sh
 
 按改动类型选择门禁、单测命令和日志位置见 `docs/verification.md` §1.1。
 
+### FPGA UART 下载用户程序
+
+```bash
+bash scripts/build_boot.sh                 # 2 KiB Boot 初始化镜像
+bash scripts/build_fpga_app.sh sw/example  # 链接到 0x810 并生成 CRC package
+bash scripts/test_boot.sh                  # 协议单测 + 真实 UART 端到端仿真
+
+# 上板后按住 BOOT0（GPIO[0]，低有效）复位，然后：
+python3 scripts/uart_boot.py --port /dev/ttyUSB0 \
+    --image build/fpga/app/app.bin
+```
+
+FPGA 顶层为 `fpga/soc_fpga_top.v`；普通复位自动运行有效应用，按住 BOOT0 强制进入下载器。
+当前下载到易失性 ITCM，不含外部 Flash 烧写。引脚、协议和集成限制见
+`docs/fpga_boot.md`。
+
 ## 文件布局
 
 ```
@@ -93,6 +110,8 @@ sw/isa/          riscv-arch-test 目标适配层（model_test.h、link.ld）
 sw/demo/         裸机 hello + 定时器中断 demo
 sw/lib/          自写 C 程序的运行时（crt0/trap/UART/string/链接脚本）
 sw/example/      参考用户程序（DTCM/定时器/GPIO/中断）
+sw/boot/         FPGA 驻留 UART Bootloader 与应用链接脚本
+fpga/            带 Boot 初始化/写保护的板卡无关 SoC 顶层
 bench/           CoreMark / Dhrystone 源码、移植层和共用运行时
 cocotb/          cocotb 验证：soc/（总线+外设）、core/（微架构）、common/（BFM/模型）
 verif/riscv_dv/  riscv-dv 生成器（vendored）与 lockstep 比对脚本
@@ -114,6 +133,9 @@ archive/         原始 core
 | GPIO | `0x2000_1000` | 4 KiB |
 | UART | `0x2000_2000` | 4 KiB |
 | SPI | `0x2000_3000` | 4 KiB |
+
+FPGA UART Boot 配置将 ITCM 的前 2 KiB 设为受保护 Boot 区，应用头/入口为
+`0x800/0x810`；默认非 FPGA 配置仍从 0 开始运行普通程序。详见 `docs/fpga_boot.md`。
 
 ## 外设寄存器映射
 
@@ -164,10 +186,12 @@ IRQ = pending & IRQ_EN。要在保持定时器使能的同时清除 pending，�
 
 ## 核心架构（简版）
 
-- IF/ID/EX/MEM/WB。EX/MEM->ID 前递消除 ALU 相关停顿；只有 load-use（含 AMO/LR/SC）
-  需要停顿（2 周期，数据在 WB 才可用）。x0 硬连线，优先于所有前递。
-- IF 级分支预测：64 项 BTB + 2-bit 饱和计数器（IALIGN=16，索引 PC[6:1]）。预测正确的
-  taken 分支/跳转无惩罚；预测错误仍走 EX 重定向与冲刷（约 3 周期）。
+- IF/ID/EX/MEM/WB。EX/MEM->ID 前递消除 ALU 相关停顿；普通 TCM load-use 在
+  distance 0 只停 1 拍，distance 1 起由 MEM 前递/WB 旁路覆盖。总线 load 和 AMO/LR/SC
+  仍为 2 拍。x0 硬连线，优先于所有前递。
+- IF 级分支预测：64 项 BTB + 2-bit 饱和计数器（IALIGN=16，索引 PC[6:1]），另有
+  4 项 RAS 预测返回地址。预测正确的 taken 分支/跳转无惩罚；预测错误仍走 EX
+  重定向与冲刷（约 3 周期）。
 - RVC：IF 每拍读两个 ITCM word，压缩指令（Zca + Zcf）在本拍展开为规范 32 位 IR，不需要装配气泡；
   非法压缩编码产生 cause 2，`mtval` 为零扩展半字，`mepc` 保留 2 字节对齐。
 - RV32A：`LR.W/SC.W` 与九个 `AMO*.W`，4 字节保留、TCM 上的两周期读改写（只写一次）；
@@ -199,6 +223,8 @@ IRQ = pending & IRQ_EN。要在保持定时器使能的同时清除 pending，�
   `0x7FFC` 写 halt magic，testbench 打印 UART 并比较结果码。
   `scripts/build_app.sh <dir>` 编译 `sw/lib` + 程序目录并运行；
   详见 `docs/c_programming.md`。
+- `sim/tb_boot.v` 用真实 UART 收发完成 FPGA Boot 下载，覆盖 CRC/越界、写保护、
+  应用运行和 BOOT0 启动选择；`scripts/test_boot.sh` 同时运行主机协议单测。
 - `tests/isa/env/arch_test.h` 包含针对旧 `jalr-01` 宏的本地兼容补丁（新版 binutils
   拒绝 `la x0,...`；补丁改为发出 `nop`）。
 - `cocotb/core/test_rvc.py` 与 `test_amo.py` 定向覆盖 RVC 展开/控制流/trap 与
@@ -216,19 +242,24 @@ testbench plusarg、调试流程和预期结果见 `docs/verification.md`；coco
 
 ## 性能
 
-100 MHz、RV32IMACF（无 D、无 cache），数据位于 DTCM，带 EX/MEM->ID 前递和 IF 级
-分支预测，RVC 由 IF 的 64 位取指窗口展开。benchmark 源码不做算法改动：**ground rule**
-用 `-O2 -march=rv32imacf_zicsr` 原样编译；**best** 只调整编译方式（Dhrystone 仅去掉源码
-里非算法性的 `no-inline` pragma，CoreMark 用 `-O2 -flto -funroll-loops -fipa-pta`）。
-同源码同参数但 `-march=rv32im_zicsr` 的对照：CoreMark **284.3**（351,767 周期，
-100 MHz）；RVC 让 CoreMark 文本从 25,550 B 降到
-21,728 B，周期降到 345,197。
+100 MHz、RV32IMACF（无 D、无 cache），数据位于 DTCM，带 EX/MEM->ID 前递、普通 TCM
+load 的 MEM 前递和 IF 级 BTB + 4 项 RAS，RVC 由 IF 的 64 位取指窗口展开。benchmark
+源码不做算法改动：**ground rule**用 `-O2 -march=rv32imacf_zicsr` 原样编译；**best**
+只调整编译方式（Dhrystone 仅去掉源码里非算法性的 `no-inline` pragma，CoreMark 用
+`-O2 -flto -funroll-loops -fipa-pta`）。当前 best 数字使用本机 GCC 13.2 和
+`MARCH=rv32imafc_zicsr`（同一 ISA 的规范写法）；ground 行保留 GCC 14.2 历史参考。
+同源码同参数但 `-march=rv32im_zicsr` 的历史对照：CoreMark **284.3**（351,767 周期，
+100 MHz）；RVC 曾让 CoreMark 文本从 25,550 B 降到 21,728 B，周期降到 345,197。
+
+本轮 RAS + TCM load 前递的同编译器对照（GCC 13.2）：CoreMark 从 355,003 降至
+324,490 周期，分数从 281.687 提升至 308.175（**+9.43%**）；Dhrystone 从 201,558 降至
+190,558 周期，从 248,067 提升至 262,387 Dhrystones/s（**+5.77%**）。
 
 | Benchmark | 模式 | 分数 | 归一化 |
 |---|---|---|---|
-| CoreMark 1.0 | best（RV32IMACF） | **289.69** | **2.90 CoreMark/MHz** |
-| Dhrystone 2.1 | ground | **135,660 Dhrystones/s** | **77.2 DMIPS**，0.772 DMIPS/MHz |
-| Dhrystone 2.1 | best | **248,690 Dhrystones/s** | **141.5 DMIPS**，**1.415 DMIPS/MHz** |
+| CoreMark 1.0 | best（RV32IMACF，GCC 13.2） | **308.175** | **3.08 CoreMark/MHz** |
+| Dhrystone 2.1 | ground（GCC 14.2 参考） | **135,660 Dhrystones/s** | **77.2 DMIPS**，0.772 DMIPS/MHz |
+| Dhrystone 2.1 | best（GCC 13.2） | **262,387 Dhrystones/s** | **149.3 DMIPS**，**1.493 DMIPS/MHz** |
 
 ```bash
 bash scripts/build_bench.sh coremark              # CoreMark best
@@ -239,7 +270,7 @@ make bench                                        # 同上
 ```
 
 分数由 core 的 `cycle` CSR 精确计数，不是仿真器 wall-clock。默认运行长度很短
-（Dhrystone 500 轮 ≈ 0.008 秒，CoreMark 1 次迭代 ≈ 0.007 秒），**不满足**
+（Dhrystone best 500 轮 ≈ 0.0019 秒，CoreMark best 1 次迭代 ≈ 0.00324 秒），**不满足**
 Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是周期归一化分数，
 不是认证分数。运行次数、官方长度命令和限制见 `docs/benchmarks.md` §4.3。
 
@@ -249,8 +280,8 @@ Dhrystone 的 2 秒惯例和 CoreMark 的 10 秒官方规则，因此这些是�
   寄存器阵列，而不是编译好的 SRAM 宏。这样既保留有代表性的 CPU 逻辑和除法器，又避免
   产生数百万个推断 FF。完整签核请使用存储器编译器与 Liberty RAM 模型。
 - `constraints/core.sdc` 目标为 10 ns 时钟（100 MHz）、2 ns I/O 延迟、0.05 pF 负载。
-- 当前 pre-CTS 结果（OpenSTA 3.1.0，理想时钟）：setup +3.251 ns，hold +0.083 ns，
-  TNS/WNS 0.00。CTS 后以及换用 SRAM 宏模型后需重新检查 hold。
+- 当前 pre-CTS 结果（OpenSTA 3.1.0，理想时钟）：setup +3.241 ns，hold +0.083 ns，
+  TNS/WNS 0.00，共 99,875 个 Nangate45 单元。CTS 后以及换用 SRAM 宏模型后需重新检查 hold。
 - `scripts/setup_opensta.sh` 按 OpenSTA 官方 Ubuntu Dockerfile 的流程，在 `/opt/opensta`
   下从源码构建 CUDD 3.0.0 和 OpenSTA，安装为 `/opt/opensta/bin/sta` 和
   `/usr/local/bin/sta`。登录 shell 通过 `/etc/profile.d/opensta.sh` 把

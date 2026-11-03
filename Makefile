@@ -2,7 +2,7 @@ SHELL := /bin/bash
 PYTHON ?= python3
 T ?=
 
-.PHONY: help mirror setup fetch-tests fetch-lib isa demo app bench cocotb-setup cocotb riscv-dv synth opensta sta clean all
+.PHONY: help mirror setup fetch-tests fetch-lib isa demo app bench boot fpga-app boot-test cocotb-setup cocotb riscv-dv synth opensta sta clean all
 
 help:
 	@echo "Sprouts500 targets:"
@@ -13,6 +13,9 @@ help:
 	@echo "  make demo         build and run the bare-metal SoC demo"
 	@echo "  make app APP=dir  build and run a user C program (e.g. sw/example)"
 	@echo "  make bench        run CoreMark and Dhrystone (BENCH=coremark|dhrystone)"
+	@echo "  make boot         build the 2 KiB resident FPGA UART bootloader"
+	@echo "  make fpga-app APP=dir  build/package an app for UART boot at 0x810"
+	@echo "  make boot-test    run protocol tests and end-to-end UART download simulation"
 	@echo "  make cocotb-setup one-time cocotb venv (python3.14-dev)"
 	@echo "  make cocotb       run cocotb SoC + core suites"
 	@echo "  make riscv-dv     riscv-dv random lockstep vs Sail (seeds 1 2 3)"
@@ -45,6 +48,16 @@ app:
 
 bench:
 	bash scripts/build_bench.sh $(BENCH)
+
+boot:
+	bash scripts/build_boot.sh
+
+fpga-app:
+	@if [ -z "$(APP)" ]; then echo "usage: make fpga-app APP=<dir>"; exit 2; fi
+	bash scripts/build_fpga_app.sh $(APP)
+
+boot-test:
+	bash scripts/test_boot.sh
 
 cocotb-setup:
 	bash scripts/setup_cocotb.sh

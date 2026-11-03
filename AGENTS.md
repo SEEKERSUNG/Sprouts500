@@ -14,10 +14,11 @@ Sprouts500 是一个最简的五级 RV32IMACF MCU IP，仅支持 Ubuntu/Linux。
 - `docs/verification_cocotb.md`、`docs/verification_cocotb_core.md` — cocotb 套件
 - `docs/verification_riscv_dv.md` — riscv-dv + Sail 指令级随机 lockstep
 - `docs/benchmarks.md` — CoreMark/Dhrystone ground rule 与 best 分数
+- `docs/fpga_boot.md` — FPGA BOOT0/UART 下载、协议与集成
 
 当前状态：I/M/C 官方 ISA 73/73 + A 定向 3/3 + F 146/146（合计 **222/222**）；SoC demo 通过；
-Yosys 0.52 Nangate45 综合通过；OpenSTA 3.1.0 **100 MHz pre-CTS MET**
-（setup +3.251 ns，hold +0.083 ns，TNS/WNS 0.00）。TCM 是推断阵列，
+Yosys 0.33 Nangate45 综合通过（本机内存受限时使用 `-noshare`）；OpenSTA 3.1.0
+**100 MHz pre-CTS MET**（setup +3.241 ns，hold +0.083 ns，TNS/WNS 0.00）。TCM 是推断阵列，
 CPU 时序运行时缩为 2 word；完整签核仍需要 SRAM 宏模型，并在 CTS 后复查 hold。
 
 ## 必需命令
@@ -27,7 +28,8 @@ bash scripts/setup_ubuntu.sh
 python3 scripts/run_isa.py     # 222/222
 bash scripts/build_demo.sh     # TEST_PASS
 bash scripts/build_bench.sh    # CoreMark/Dhrystone best；MODE=ground 取 Dhrystone ground
-bash scripts/run_cocotb.sh     # soc 72 + core 77 项通过
+bash scripts/test_boot.sh      # FPGA UART Boot 协议单测 + BOOT_TEST_PASS
+bash scripts/run_cocotb.sh     # soc 72 + core 78 项通过
 bash scripts/run_riscv_dv.sh   # riscv-dv + Sail lockstep 6/6 通过
 bash scripts/synth.sh
 sudo bash scripts/setup_opensta.sh # 一次性安装 CUDD + OpenSTA 到 /opt/opensta
@@ -41,8 +43,11 @@ bash scripts/sta.sh             # 期望 100 MHz 下 setup/hold MET
 - RTL 修改前后：222/222 ISA 测试、SoC demo、cocotb 套件和 riscv-dv lockstep
   6/6 必须通过。
 - 不要删除 `IF_ID_*_hold`、`id_flush_q`、`bus_conflict`、x0-before-all-bypasses、
-  `EX_funct3[1]` 除法结果选择，或前递/预测的排除条件（load/AMO 不前递、计数器饱和、
-  `IF_pred_*_q` 配对）。
+  `EX_funct3[1]` 除法结果选择，或前递/预测的排除条件（总线 load/AMO 不走普通 TCM
+  MEM 前递、计数器饱和、`IF_pred_*_q` 配对）。普通 TCM load 的 EX->MEM 捕获、同拍
+  store 字节合并、WB 原始 word 保存，以及 RAS 的 EX 提交和 ID/EX 视图前递也必须保留。
+- `ITCM_BOOT_BYTES` 默认 0；FPGA 写保护必须同时门控数组写和同拍 store/load 合并。
+  `ITCM_INIT_FILE` 默认为空。BOOT0、地址边界、CRC 和下载顺序见 `docs/fpga_boot.md`。
 - RVC 第二个 IF 读端口、`if_rdata_hi_q`、64 项 BTB 索引 `PC[6:1]`、AMO 两拍写一次、
   LR/SC 重叠逻辑、MMIO 原子陷阱、`mepc` 只清 bit 0；FPU 的 start/busy/done
   握手、FP 寄存器 scoreboard、FS/fflags 规则。原因见 `CLAUDE.md`。

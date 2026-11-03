@@ -26,7 +26,7 @@ bash scripts/run_cocotb.sh cocotb/core    # 推荐：统一日志/退出码
 期望（默认 3 个随机种子）：
 
 ```text
-77 passed
+78 passed
 ```
 
 只跑一个文件或一个用例：
@@ -47,7 +47,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 - 构建产物：`build/cocotb_core/sim_build/`；cocotb 结果 XML：
   `build/cocotb_core/results/`。Icarus 增量编译，RTL/TB 不变时只有第一次慢。
 - 验证环境（Ubuntu 26.04，Icarus 12，cocotb 2.1.0，Python 3.14）默认 3 个种子约
-  **25 秒**跑完 77 项。
+  **25 秒**跑完 78 项。
 
 依赖：`.venv` 内安装 cocotb 2.1.0 与 pytest；Icarus 12 需在 `PATH` 中。core 套件的
 辅助代码全部在 `cocotb/core/_helpers.py` 内，不 import `cocotb/common/`。
@@ -89,7 +89,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 
 ## 3. 测试与架构不变量的对应
 
-`docs/architecture.md` §9 的编号如下（本套件覆盖 1–4、6–9、11–14、15–22；5 属于
+`docs/architecture.md` §9 的编号如下（本套件覆盖 1–4、6–9、11–30；5 属于
 外设套件，10 属于 ISA testbench 的 4 MiB ITCM）。
 
 | 文件 | 用例数（默认种子） | 主要目标 |
@@ -104,7 +104,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | `test_bus.py` | 5 | 总线事务、等待冻结、`bus_conflict`、慢读、CSR 单次提交 |
 | `test_tcm_stall.py` | 7 | load-use 停顿深度、`IF_ID_hold`、`id_flush_q`、jalr link、div 冻结、TCM 写门控 |
 | `test_forward.py` | 12 | EX/MEM 距离的 ALU/mul/CSR/link/store/branch 前递、优先级、load-use 深度、div、trap 取消 |
-| `test_branch_pred.py` | 9 | BTB 训练/饱和、交替方向、嵌套/自循环、异常/中断不训练、JALR 目标变化、陈旧项、冻结 |
+| `test_branch_pred.py` | 10 | BTB 训练/饱和、交替方向、嵌套/自循环、异常/中断不训练、JALR 目标变化、RAS 嵌套/链接寄存器/错误纠正、陈旧项、冻结 |
 | `test_rvc.py` | 6 | 压缩 ALU/访存展开、lane-1 32 位指令、C.J/C.JAL/C.JALR/C.BEQZ/C.BNEZ、链接值与 2 字节目标、HINT、保留编码、mepc 掩码、BTB 两个 lane、压缩循环预测 |
 | `test_amo.py` | 4 | 九个 AMO（DTCM/ITCM）、写脉冲、LR/SC 重叠/失效/陷阱、load 类停顿、div 冻结、AMO→总线、aq/rl、中断、非对齐/MMIO 陷阱 |
 | `test_fp.py` | 3 | FLW→FADD/FMUL 与 FP RAW 的 scoreboard/WB 旁路；fdiv 的 NX 累积与 fflags 清除；FS=Off 时浮点指令的非法陷阱与恢复 |
@@ -117,7 +117,7 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | 11 预测纠错走单一 `redirect`/`redirect_pc` | `test_branch_pred` 全部用例、`test_branch_rand` |
 | 12 `IF_ID_pred_*_hold` 保存寄存后的 `IF_pred_*_q` | `test_branch_pred[stall_freeze,nested_loop]`、`test_tcm_stall[hold]` |
 | 13 2-bit 计数器饱和；valid/计数器复位；陈旧项纠正 | `test_branch_pred[loop_taken,self_loop,stale_noncontrol,exception_no_train]` |
-| 14 只有 load/未完成除法停顿；x0 在前递之前 | `test_forward` 全部用例、`test_hazard` |
+| 14 普通 TCM load-use 1 拍；总线/A 保持原停顿；x0 在前递之前 | `test_forward` 全部用例、`test_hazard`、`test_tcm_stall` |
 | 2 重定向后 `id_flush_q` | `test_tcm_stall[branch]`、`test_branch_rand`、`test_branch_pred`（错误预测/陷阱/`mret` 都走该序列） |
 | 3 x0 判断先于所有前递/旁路 | `test_forward[x0]`、`test_hazard`、`test_exec_rand` |
 | 4 除法结果选择 `EX_funct3[1]` | `test_m_ext`、`test_tcm_stall[div]`、`test_interrupt[div_before_irq]` |
@@ -137,6 +137,8 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 | 23-24 FPU start/done 与 FP scoreboard | `test_fp[hazards]` |
 | 25 FS=Off 陷阱、FS Dirty | `test_fp[fs_off]`、`test_fp[fflags]` |
 | 26-28 fflags/FLW-FSW/NaN 规则 | `test_fp[fflags]`；算术语义由 146 项 F ISA 测试覆盖 |
+| 29 RAS 提交/视图前递与错误纠正 | `test_branch_pred[ras_calls,exception_no_train,interrupt_no_train]` |
+| 30 TCM 提前读、store 合并与 MEM load 前递 | `test_forward[precedence,loaduse_depth,store_data]`、`test_tcm_stall`、`test_mem_rand` |
 
 另外，§6.2 总线行为（单 outstanding、`bus_wait`、读数据捕获、写选通）由
 `test_bus.py` 覆盖；§9 第 5 条（定时器 CTRL 的 W1C）不在 core 套件范围内。
@@ -146,7 +148,10 @@ COCOTB_SEEDS=5 .venv/bin/python -m pytest cocotb/core -o python_files='*.py'
 - `test_hazard`：每个种子 120 组生产者/消费者，随机 0–3 个 nop 距离，统计
   `raw_stall`、`IF_ID_hold`、`div_busy`、`pipe_freeze`、`wb_repeat`，并要求全部
   trace、寄存器、DTCM 与参考模型一致；静态 oracle 计算 load-use 对数，并检查每个
-  非除法 `raw_stall` 周期都有 load 生产者。
+  非除法 `raw_stall` 周期都有 load 生产者。静态下限只计算必须停 1 拍的立即相邻
+  TCM load/consumer 对，distance-1 消费者必须能直接取得 MEM 前递值。
+- `test_branch_pred[ras_calls]`：两个调用点共享 return，覆盖 `x1`/`x5`、嵌套调用、
+  故意修改返回地址后的 EX 纠正和空栈回退；最终 RAS 必须为空，错误路径不得退休。
 - `test_branch_rand`：同一仿真内先跑链接镜像，再把以不同 origin 汇编的覆盖镜像
   拷入入口并**再次复位**；复位状态泄漏或冲刷遗漏都会在 trace 上立刻显形。
 - `test_bus[slow_read]`：从设备对目标地址保持 6 拍 `bus_ready=0`，核对
@@ -208,5 +213,5 @@ wire csr_we = EX_valid && EX_csr_write && !trap_taken && !EX_illegal &&
   不是 SoC 的 32 KiB ITCM 配置；TCM 通过层次化赋值预载，不走复位/总线。
 - **实现层面**：没有门级/综合后仿真，没有 SDF；时序签核仍由 `scripts/sta.sh`
   负责。cocotb 套件不替代 ISA 222/222、demo 和综合门禁。
-- **运行环境**：每项 pytest 用例启动一次独立 vvp；默认 3 种子约 16 秒，种子数
+- **运行环境**：每项 pytest 用例启动一次独立 vvp；默认 3 种子约 25 秒，种子数
   增大时按随机文件数线性增长。结果 XML 只保留最近一次运行的记录。

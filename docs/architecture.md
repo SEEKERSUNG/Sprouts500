@@ -35,8 +35,9 @@ PC/ITCM -> decode/regs -> ALU/branch/CSR -> TCM/bus access -> load align/reg wri
 ### 2.1 IF 与 ITCM 读取级
 
 IF 每个周期读 ITCM 的**两个 word**：`IF_PC_q` 所在的 word（`if_rdata_q`）和下一个
-word（`if_rdata_hi_q`）。ITCM 因此有 3 个读端口（两个 IF、一个 MEM 数据）；TCM 是
-推断阵列，换成 SRAM 宏时需要 3R1W 或等价的双周期方案。`IF_PC_q` 是“正在送给 ID 的指令”的 PC（2 字节粒度），
+word（`if_rdata_hi_q`）。ITCM 因此有 3 个读端口（两个 IF、一个由 EX 提供地址的
+数据端口）；TCM 是推断阵列，换成 SRAM 宏时需要 3R1W 或等价的双周期方案。
+`IF_PC_q` 是“正在送给 ID 的指令”的 PC（2 字节粒度），
 `IF_PC` 是下一个取指地址（`IF_PC_q + 2/4`，或预测目标）。
 
 `if_cur_half = IF_PC_q[1] ? if_rdata_q[31:16] : if_rdata_q[15:0]`：低两位是 `11` 时
@@ -70,6 +71,12 @@ ID_is_compressed <= if_insn_compressed
 `IF_pred_taken_q`/`IF_pred_target_q`（只在正常前进或重定向边沿更新，停顿期间保持），
 经 `IF_ID_pred_*_hold`、`ID_pred_*` 传到 `EX_pred_*`。EX 用该指令自己的预测（不是
 新查表）与真实结果比较，训练使用 `EX_PC`（指令 PC，不是取指 word）。
+
+BTB 之外还有一个 **4 项返回地址栈（RAS）**，预测 `rd=x0`、`rs1=x1/x5`、立即数为 0
+的 JALR 返回；RVC 已在 IF 展开，因此 `C.JR/C.JALR` 也走同一分类。call 压入
+`EX_PC + 指令长度`，return 弹出，架构状态只在 EX 中真实执行且未陷阱时更新。IF 的
+预测视图会组合应用 ID/EX 中更老 call/return 的效果，避免短函数的 return 读到旧栈顶。
+RAS 只改变预测，错误目标仍由 EX 的同一重定向路径纠正；陷阱和 `mret` 清空 RAS。
 
 ### 2.2 为什么需要 `IF_ID_*_hold`
 
@@ -139,17 +146,22 @@ CSR 合法性在 ID 中由 `csr_valid()` / `csr_writable()` 检查：
 EX 比 MEM 年轻，所以 EX 优先；同一周期有多个同名写者时取最年轻的值。
 
 ```
-ex_fwd_ok  = EX_valid  and EX_rd_write_req and !EX_mem_read and !EX_amo
-             and !(ex_is_div and div_state != DIV_DONE)
-mem_fwd_ok = MEM_valid and MEM_rd_write_req and !MEM_mem_read and !MEM_amo
+ex_fwd_ok       = EX_valid  and EX_rd_write_req and !EX_mem_read and !EX_amo
+                  and !(ex_is_div and div_state != DIV_DONE)
+mem_fwd_ok      = MEM_valid and MEM_rd_write_req and !MEM_mem_read and !MEM_amo
+mem_load_fwd_ok = MEM_valid and MEM_rd_write_req and MEM_mem_read and !MEM_amo
+                  and (MEM_load_src == ITCM or MEM_load_src == DTCM)
+                  and !pipe_freeze and !mem_amo_active
 ```
 
-load 的读数据在 MEM->WB 边沿才寄存（`mem_*_rdata_q`/`bus_rdata_q`），所以 load
-生产者不能从 EX/MEM 前递；除法结果在 `DIV_DONE` 前也是 0，显式排除。其余 ALU、
+普通 TCM load 的读地址在 EX 产生，数据在 EX->MEM 边沿捕获；MEM 因此可以直接对字节/
+半字/word 做对齐与符号扩展并前递。若同拍 MEM 中更老的 store 写同一 word，捕获时按
+`wstrb` 逐字节合并新数据，避免 store->load 读到旧值。WB 还保存本 load 的原始 word，
+保证背靠背 load 不串用数据。除法结果在 `DIV_DONE` 前也是 0，显式排除。其余 ALU、
 LUI/AUIPC、JAL/JALR link、CSR 旧值、mul 都可以从 EX 或 MEM 前递。
 
-AMO/LR/SC 的结果（旧内存值或 SC 状态）只在 MEM/WB 可用，因此与 load 完全一样：
-EX/MEM 不前递，消费者走 load-use 停顿。
+总线 load 仍只在 MEM->WB 边沿捕获 `bus_rdata_q`，AMO/LR/SC 的结果（旧内存值或 SC
+状态）也保持原来的 MEM/WB 路径；这些生产者不能走普通 TCM load 的 MEM 前递。
 
 只有不可前递的生产者才停顿：
 
@@ -157,7 +169,7 @@ EX/MEM 不前递，消费者走 load-use 停顿。
 id_dep_ex  = ID uses rsN and rsN == EX_rd and EX_rd_write_req and EX_rd != 0
              and (EX_mem_read or EX_amo or divider not DONE)
 id_dep_mem = ID uses rsN and rsN == MEM_rd and MEM_rd_write_req and MEM_rd != 0
-             and (MEM_mem_read or MEM_amo)
+             and ((MEM_mem_read and not mem_load_fwd_ok) or MEM_amo)
 raw_stall  = id_dep_ex | id_dep_mem
 ```
 
@@ -167,10 +179,10 @@ raw_stall  = id_dep_ex | id_dep_mem
 - EX 填入气泡，
 - MEM/WB 继续。
 
-结果是：ALU 相关 0 停顿；load-use 仍是 2 个停顿周期（load 在 EX、MEM 各停一拍，
-到 WB 由旁路提供数据）；div 在 `DIV_DONE` 后可直接前递。注意 `raw_stall` 是
-电平信号：消费者在 ID 等待未完成除法时，它在整个 `div_busy` 期间保持高，所以
-统计 load-use 停顿时要减去/排除 `div_busy` 周期。
+结果是：ALU 相关 0 停顿；普通 TCM load-use 在 distance 0 只停 1 拍，distance 1 起由
+MEM 前递或 WB 旁路覆盖；总线 load 和 AMO/LR/SC 仍是 2 拍。div 在 `DIV_DONE` 后可
+直接前递。注意 `raw_stall` 是电平信号：消费者在 ID 等待未完成除法时，它在整个
+`div_busy` 期间保持高，所以统计 load-use 停顿时要减去/排除 `div_busy` 周期。
 
 `x0` 是硬连线的：`id_rs1_data` / `id_rs2_data` 在最外层对寄存器 0 返回 0，
 先于所有前递/旁路。不要把 x0 判断移到后面；否则对 `rd=0` 的写可能泄漏到 x0 的读。
@@ -265,11 +277,17 @@ mul_uu = zero_ext(rs1) * zero_ext(rs2)
 
 ### 6.1 TCM
 
-- ITCM 有两个独立读端口：`IF_PC`（取指）和 `MEM_addr`（数据）。
-- DTCM 有一个读端口（`MEM_addr`）。
-- 读输出是寄存的（`if_rdata_q`、`mem_itcm_rdata_q`、`mem_dtcm_rdata_q`）。
+- ITCM 有三个读端口：两个取指 word（`IF_PC`），以及一个由 `EX_addr` 提供地址、
+  在 MEM 使用数据的数据端口。
+- DTCM 数据读端口同样由 `EX_addr` 提供地址。
+- 读输出是寄存的（`if_rdata_q`、`mem_itcm_rdata_q`、`mem_dtcm_rdata_q`）。普通 TCM
+  load 在 EX->MEM 边沿捕获数据；同拍更老 MEM store 写同 word 时按字节合并。
 - 写按字节：`if (mem_wstrb_eff[i]) mem[index][i*8 +: 8] <= mem_wdata_eff[...]`。
 - TCM 写由 `!pipe_freeze` 门控，因此冻结的 MEM 级不会重复写入同一 store。
+- 可选 `ITCM_INIT_FILE` 用于 FPGA 初始化驻留 Boot 镜像，默认空字符串仍由 testbench
+  加载；可选 `ITCM_BOOT_BYTES` 忽略低地址 Boot 区写，默认 0 不保护。该写门控同时作用于
+  同拍 store/load 合并，被拒绝的写不能经 MEM 前递变得可见。完整 UART Boot 布局见
+  `docs/fpga_boot.md`。
 
 ### 6.1.1 RV32A：两周期读改写与 LR/SC 保留
 
@@ -396,9 +414,9 @@ PC <= mepc
 12. `IF_ID_pred_*_hold` 必须保存寄存后的 `IF_pred_*_q`（与 `if_rdata_q` 配对），
     不能保存对 `IF_PC` 的实时查表结果（它比 ID 指令超前一条）。
 13. 2-bit BTB 计数器必须饱和；`btb_valid` 和计数器要复位，tag/target 由 valid
-    门控。陈旧项命中非控制指令时由 `EX_PC+4` 纠正。
-14. 只有 load/AMO/LR/SC 生产者（以及未 DONE 的除法）会触发 `raw_stall`；x0 判断在所有
-    前递/旁路之前。
+    门控。陈旧项命中非控制指令时由 `EX_PC + 指令长度` 纠正。
+14. 普通 TCM load 只有 distance-0 消费者停 1 拍，distance 1 起由 MEM 前递/WB 旁路
+    覆盖；总线 load、AMO/LR/SC 保持原来的 2 拍停顿。x0 判断在所有前递/旁路之前。
 15. RVC：`if_rdata_q` 是包含 `IF_PC_q` 的 word；`if_rdata_hi_q` 是其下一个 word；
     `IF_PC_q` 是呈现指令的 PC，`IF_PC` 是取指地址。压缩指令展开为规范 32 位 IR，
     非法压缩编码展开为 `{16'b0, ci}`。
@@ -426,6 +444,13 @@ PC <= mepc
 27. `FLW`/`FSW` 分别使用 I/S 立即数；它们的非对齐陷阱是 cause 4/6。
 28. NaN 统一为规范 qNaN，NV/DZ/OF/UF/NX 的置位和 FMIN/FMAX/比较的 NaN 规则必须与
     RISC-V SoftFloat 一致（见 `rtl/fp_unit.v`）。
+29. RAS 架构状态只在 EX 的真实 call/return 上更新；IF 预测视图必须组合应用 ID/EX
+    中更老操作。陷阱/`mret` 清空 RAS，错误预测仍走统一 EX 重定向。
+30. 普通 TCM load 的数据在 EX->MEM 边沿捕获；同拍更老 store 必须按字节合并，WB 保存
+    本 load 的原始 word。不要把该 MEM 前递扩展到总线 load 或 AMO/LR/SC。
+31. `ITCM_BOOT_BYTES` 的写保护必须同时门控真实数组写和同拍 store/load 合并；默认 0
+    才能保持普通 ISA/应用自修改 ITCM 的行为。FPGA 初始化文件默认空，不能取代 testbench
+    的显式 `$readmemh`。
 
 ## 10. 复位
 
@@ -433,22 +458,24 @@ PC <= mepc
 - 所有 valid 位为 0；`id_flush_q=1`。
 - TCM 和寄存器堆不复位（x0 读为 0；其他寄存器由软件初始化）。
 - BTB 的 `btb_valid` 与方向计数器复位为 0；tag/target 不复位，由 valid 保证只在
-  写入后才被使用。预测元数据寄存器复位为 0。
+  写入后才被使用。预测元数据寄存器复位为 0，RAS 计数器也复位为 0。
 - CSR 复位为 0；`mepc`/`mtvec` 在陷阱前由软件写入。
 
 ## 11. 性能汇总
 
 - ALU 操作：稳态 1 周期/指令；压缩指令同样 1 周期（IF 展开，无气泡）。
 - ALU 相关：0 停顿（EX/MEM->ID 前递）。
-- load-use：2 个停顿周期（load 到 WB 才能旁路）。
+- 普通 TCM load-use：distance 0 为 1 个停顿周期，distance 1 起由 MEM 前递/WB 旁路
+  覆盖；总线 load、AMO/LR/SC 仍为 2 个停顿周期。
 - 预测正确的 taken 分支/跳转：无冲刷惩罚；首次执行/预测错误约 3 周期。
-- JALR 返回地址每次变化时（无 RAS）会持续预测错误。
+- 4 项 RAS 预测常规 `x1`/`x5` 返回，短函数通过 ID/EX 视图前递避免旧栈顶。
 - `mul`：1 周期。
 - `div/rem`：约 33 周期，整个流水线冻结；结果在 DONE 后可前递。
 - AMO：MEM 占 2 拍 + 1 个气泡（3 周期/条）；LR 同普通 load；SC 1 周期。
 - 压缩代码：静态体积约减少 25–30%，动态指令数减少，取指每拍都能送出一条 16 位
   指令（32 位的 lane-1 指令也不再额外占拍）。
-- CoreMark best（RV32IMACF，benchmark 不含浮点）289.69（345,197 周期，2.90 CoreMark/MHz，100 MHz）；同源码
-  RV32IM 基线 284.3（351,767 周期）。Dhrystone best（RV32IMACF）248,690（201,053 周期，
-  1.415 DMIPS/MHz），ground 135,660（368,567 周期，0.772 DMIPS/MHz）。
+- CoreMark best（本机 GCC 13.2，RV32IMACF，benchmark 不含浮点）308.175（324,490 周期，
+  3.08 CoreMark/MHz，100 MHz）；同编译器优化前为 281.687（355,003 周期）。Dhrystone best
+  262,387（190,558 周期，1.493 DMIPS/MHz），同编译器优化前为 248,067（201,558 周期）。
+  Dhrystone ground 的 GCC 14.2 历史参考为 135,660（368,567 周期，0.772 DMIPS/MHz）。
 - UART/SPI/定时器为内存映射；无 DMA。
