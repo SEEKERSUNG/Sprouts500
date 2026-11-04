@@ -41,6 +41,7 @@ TIMER = 0x2000_0000
 GPIO = 0x2000_1000
 UART = 0x2000_2000
 SPI = 0x2000_3000
+I2C = 0x2000_4000
 
 # fake-slave addresses used for the scenario data
 SC_RD0 = FAKE + 0x00          # reset word 0 = 0xA5A5_0000
@@ -64,6 +65,7 @@ RES = {
     "timer_after_w1c": FAKE + 0xB0,
     "gpio_in": FAKE + 0xB4,
     "magic": FAKE + 0xB8,
+    "i2c_clkdiv": FAKE + 0xBC,
 }
 MAGIC = 0x600D_1234
 
@@ -84,6 +86,7 @@ EXPECTED = {
     "timer_after_w1c": 0x0B,   # EN | IE | PERIODIC, pending cleared
     "gpio_in": 0x05,           # OUT=0xA5 on DIR=0x0F, inputs pulled low
     "magic": MAGIC,
+    "i2c_clkdiv": 499,
 }
 
 #: Results written before the halt sequence; the halt sequence overwrites
@@ -92,6 +95,7 @@ RESULT_ORDER = (
     "fake_rd0", "fake_rd1", "uart_baud", "spi_clkdiv", "store_load",
     "merge_word", "merge_lb0", "merge_lb3", "merge_lbu3", "merge_lh2",
     "merge_lhu2", "timer_pending", "timer_after_w1c", "gpio_in", "magic",
+    "i2c_clkdiv",
 )
 
 PROGRAM_HEX = ROOT / "sim_build" / "core_program.hex"
@@ -104,6 +108,7 @@ def build_core_program() -> Assembler:
     a.li("x26", GPIO)
     a.li("x25", UART)
     a.li("x24", SPI)
+    a.li("x23", I2C)
 
     # -- back-to-back fake-slave loads: bus_conflict must insert a bubble so
     #    both accesses are separate transactions -----------------------------
@@ -115,8 +120,10 @@ def build_core_program() -> Assembler:
     # -- two different peripherals in consecutive loads ----------------------
     a.lw("x5", 0x08, "x25")           # UART BAUD
     a.lw("x6", 0x08, "x24")           # SPI CLKDIV
+    a.lw("x7", 0x08, "x23")           # I2C CLKDIV
     a.sw("x5", RES["uart_baud"] - FAKE, "x28")
     a.sw("x6", RES["spi_clkdiv"] - FAKE, "x28")
+    a.sw("x7", RES["i2c_clkdiv"] - FAKE, "x28")
 
     # -- store then load the same word (write must land before the read) -----
     a.li("x7", 0xDEAD_BEEF)
@@ -336,7 +343,7 @@ async def test_core_back_to_back_bus_accesses(dut):
     # every program access starts its own transaction: back-to-back accesses
     # must not merge.  These are the distinct scenario addresses touched.
     for addr in (SC_RD0, SC_RD1, FAKE + 0x04, SC_RW, SC_MERGE,
-                 UART + 0x08, SPI + 0x08):
+                 UART + 0x08, SPI + 0x08, I2C + 0x08):
         assert _events_at(events, addr), (
             f"no transaction observed at 0x{addr:08x}")
     # consecutive loads of SC_RD0/SC_RD1 produce two separate transactions
@@ -417,8 +424,8 @@ async def test_core_core_stall_bus_wait(dut):
     _check_no_duplicate_result_writes(events, fake_writes)
     first = _events_at(events, SC_RD0, False)
     assert len(first) == 1, first
-    # core_stall gates every core access.  The first 10 instructions are the
-    # five li base pointers (ALU only), so the first load only reaches MEM
+    # core_stall gates every core access.  The first 12 instructions are the
+    # six li base pointers (ALU only), so the first load only reaches MEM
     # after the pipeline has fetched them; it then waits out the rest of the
     # stall window.
     assert first[0].duration >= stall_cycles - 25, (

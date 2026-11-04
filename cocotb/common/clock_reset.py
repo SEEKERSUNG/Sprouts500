@@ -47,6 +47,8 @@ def _set_defaults(dut) -> None:
     dut.uart_loopback.value = 0
     dut.spi_miso.value = 0
     dut.spi_loopback.value = 0
+    dut.i2c_scl_ext_en.value = 0
+    dut.i2c_sda_ext_en.value = 0
     dut.m_req.value = 0
     dut.m_we.value = 0
     dut.m_addr.value = 0

@@ -238,7 +238,8 @@ run_bench() {
 "$IVERILOG" -g2012 -o "$OUT/tb_bench.vvp" \
     "$ROOT/sim/tb_bench.v" \
     "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" "$ROOT/rtl/bus.v" \
-    "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
+    "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v" \
+    "$ROOT/rtl/i2c.v"
 
 rc=0
 for b in $BENCH_NAME; do

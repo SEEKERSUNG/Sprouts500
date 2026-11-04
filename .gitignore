@@ -8,6 +8,24 @@ logs/
 *.vcd
 *.fst
 *.lxt
+*.ghw
+*.gtkw
+*.wlf
+
+# compiler / linker intermediates and standalone logs
+*.o
+*.a
+*.so
+*.d
+*.log
+
+# editor / OS local files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
 # python
 __pycache__/

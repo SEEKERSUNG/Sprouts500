@@ -47,6 +47,8 @@ Bootloader 自身的 `BOOT_MARCH` 默认已是规范顺序，不需要额外设�
 将 `fpga/soc_fpga_top.v` 作为 FPGA 顶层，连同 `rtl/*.v` 一起综合。默认初始化文件是
 `build/fpga/boot/boot.hex`，路径相对于综合工具工作目录；也可以在顶层参数中传入绝对路径。
 把时钟约束为 100 MHz，连接 UART TX/RX，并给 GPIO[0] 接上拉和 BOOT0 按钮。
+`i2c_scl/i2c_sda` 是开漏双向引脚；使用 I2C 时两路都要接外部上拉，不能使用推挽驱动。
+I2C 寄存器与速率配置见 `docs/registers.md`。
 
 先通过 JTAG 下载 FPGA 比特流，然后：
 

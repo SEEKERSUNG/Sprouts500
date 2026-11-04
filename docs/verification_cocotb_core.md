@@ -3,7 +3,7 @@
 本文件描述 `cocotb/core/` 下的 **core 级** cocotb 套件。它只测 `rtl/core.v` +
 `rtl/fp_unit.v`（core 及其浮点单元）：
 流水线、ITCM/DTCM、CSR/陷阱、中断入口、总线 master 和 M 扩展。SoC 集成、UART、
-SPI、GPIO、定时器寄存器等由独立的 `cocotb/soc/` 套件覆盖，两者互不引用。
+SPI、I2C、GPIO、定时器寄存器等由独立的 `cocotb/soc/` 套件覆盖，两者互不引用。
 
 所有检查基于：
 

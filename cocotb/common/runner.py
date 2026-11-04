@@ -28,6 +28,7 @@ SOURCES = (
     "rtl/gpio.v",
     "rtl/uart.v",
     "rtl/spi.v",
+    "rtl/i2c.v",
     "cocotb/soc/fake_slave.v",
     "cocotb/soc/tb_soc_bus.v",
 )

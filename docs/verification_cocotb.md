@@ -1,7 +1,7 @@
 # cocotb SoC 级验证
 
 本文件描述 `cocotb/soc/` 下的 SoC 级 cocotb 套件：它把 `rtl/core.v` + `rtl/fp_unit.v`、`rtl/bus.v`、
-四个外设和 `tb_soc_bus` 一起跑在 Icarus 下，用定向 + 随机测试覆盖总线、外设寄存器和
+五个外设和 `tb_soc_bus` 一起跑在 Icarus 下，用定向 + 随机测试覆盖总线、外设寄存器和
 core→总线的握手。core 流水线内部的定向测试在 `cocotb/core/` 套件中
 （见 `docs/verification_cocotb_core.md`），两者互不依赖。
 
@@ -49,8 +49,9 @@ bash scripts/run_cocotb.sh cocotb/soc -k uart -x       # 其余参数传给 pyte
 - 已实测的种子：`0 1 2 3 4 5 17 99 108 777 999 2026 12345 123456789 987654321
   4242424242 31415926535897932384626433832795028841`，以及批量扫描
   `4..40 55 108 200 777 888 999 1234 4321 271828 314159 161803 999983
-  123456789 987654321 2147483647`，全部 72 项通过（无一失败）；
-  `SEED=12345` 连续两次运行，125 条随机操作（周期、地址、数据）逐条一致。
+  123456789 987654321 2147483647`，历史原 72 项全部通过（无一失败）；
+  当前增加 10 项 I2C 后为 82 项，已用 `SEED=12345` 完整通过。
+  历史原套件在 `SEED=12345` 连续两次运行时，125 条随机操作（周期、地址、数据）逐条一致。
 
 ## 2. 结构
 
@@ -62,6 +63,7 @@ bash scripts/run_cocotb.sh cocotb/soc -k uart -x       # 其余参数传给 pyte
 | `cocotb/common/bus_master.py` | `BusMaster.write/read`（遵守 `req && !req_q` 边沿语义）、`read_held`/`write_held`、`drive_ready` |
 | `cocotb/common/uart_bfm.py` | UART TX 帧解码（校验位网格）、RX 位敲 |
 | `cocotb/common/spi_bfm.py` | SCLK 采样、SPI 回环传输 |
+| `cocotb/common/i2c_bfm.py` | byte 命令辅助、7 位 EEPROM 从模型、ACK/NACK 与 SCL stretching 注入 |
 | `cocotb/common/models.py` | `TimerModel`、`GpioModel`（逐边沿重放）和 `Scoreboard` |
 | `cocotb/common/program.py` | 极简 RV32I/M 汇编器、`halt_sequence`、镜像生成 |
 | `cocotb/common/runner.py` | Icarus 构建（`sim_build/tb_soc_bus`）与 `run_tests` |
@@ -76,13 +78,13 @@ cocotb 2.x 中一个 `@pytest.mark.cocotb_runner` 外层测试只启动一个仿
 ### `tb_soc_bus.v` 的偏差（重要）
 
 `rtl/soc_top.v` 没有对外暴露总线端口，所以 testbench 按 `soc_top.v` 原样平铺复制了
-core、`bus`、timer/gpio/uart/spi 和 GPIO pad 模型，再额外加入：
+core、`bus`、timer/gpio/uart/spi/i2c 和 GPIO/I2C pad 模型，再额外加入：
 
 - `ext_master` 多路选择的外部总线主控，带独立 `ext_ready`；
 - 假从设备 `fake_slave`（`addr[31:28] >= 3`），用于连续访问、慢 `ready`、
   结果回读；
 - `core_stall`：对任意 core 访问拉低 `bus_ready_i`；
-- `core_req/we/addr/wdata/wstrb`、`fake_wr*`、四路 IRQ 可观测端口；
+- `core_req/we/addr/wdata/wstrb`、`fake_wr*`、五路 IRQ 可观测端口；
 - `+ITCM_HEX=<file>` 加载镜像；末尾 ITCM word（`0x7FFC`）作为 halt mailbox。
 
 RTL 本身没有被修改。代价是：如果 `soc_top.v` 的连线变了，`tb_soc_bus.v` 必须同步
@@ -117,6 +119,7 @@ RTL 本身没有被修改。代价是：如果 `soc_top.v` 的连线变了，`tb
 | `test_gpio.py` | 复位值；DIR/OUT/IN 语义；外部驱动只在输入脚生效；字节选通；W1C；边沿中断与 IE 门控；`addr[7:0]` 别名（IN 写被忽略）；两级同步；80 步随机测试对阵 `GpioModel` |
 | `test_uart.py` | 复位值（BAUD=867）；TX 关闭/忙时忽略 TXDATA；TX 帧格式与位网格；TX_DONE 置位与保持；自定义波特率；RX 位敲（含自定义波特率）；帧错误；溢出；TX/RX IRQ；字节选通、`addr[7:0]` 别名、STATUS 只读；8 字节随机 TX→RX 回环 |
 | `test_spi.py` | 复位值；CS 语义；四种 CPOL/CPHA × 两种位序回环；SCLK 半周期与 8 个时钟；BUSY/DONE、RXDATA 读清 DONE；IRQ；关闭/忙时忽略 TXDATA；CLKDIV 字节选通与别名；STATUS 只读；20 次随机回环；CLKDIV=1 接收错位记录 |
+| `test_i2c.py` | 10 项：复位/寄存器；多字节 EEPROM 写；repeated START + 顺序读；地址/数据 NACK 与 STOP 恢复；DONE/W1C/IRQ/EN；SCL clock stretching；非法/忙时命令忽略；字节选通/地址别名/START-only；10 轮随机写读回环 |
 | `test_core.py` | 汇编程序在真实 core 上跑：连续总线访问（`bus_conflict`）；不同外设连续 load；word/byte/half 存储后各种 load 扩展；TIMER 轮询 + W1C；GPIO 回读；假从设备 `hold` 与 `core_stall` 下 `bus_wait` 冻结、`req` 保持、不重复写 |
 
 未覆盖（有意留给其他套件/后续）：
@@ -145,8 +148,10 @@ RTL 本身没有被修改。代价是：如果 `soc_top.v` 的连线变了，`tb
 - 每个模块一次仿真、每个测试自行复位；测试之间不共享状态。
 - spi 回环依赖 testbench 里的 `spi_miso = spi_mosi`；UART 回环依赖 `uart_tx_d`
   额外一级触发器（见“发现的问题”）。
-- 假从设备是 testbench 模型，不是真实存储器；真实 SoC 只到 `0x2000_3FFF`，更高地址
+- 假从设备是 testbench 模型，不是真实存储器；真实 SoC 只到 `0x2000_4FFF`，更高地址
   读 0。
+- I2C Python 模型是单 EEPROM 从设备，覆盖 ACK/NACK 与一次性 SCL stretching；未建立多主机
+  仲裁、10 位地址或任意 I2C 从设备模型，这些也不在当前 RTL 功能范围内。
 - 没有覆盖率收集，也没有形式化验证。
 
 ## 6. 发现的问题

@@ -10,6 +10,7 @@
 //   0x2000_1000  gpio
 //   0x2000_2000  uart
 //   0x2000_3000  spi
+//   0x2000_4000  i2c
 
 #define SOC_IO32(addr) (*(volatile unsigned int *)(addr))
 
@@ -19,6 +20,7 @@
 #define SOC_GPIO_BASE   0x20001000u
 #define SOC_UART_BASE   0x20002000u
 #define SOC_SPI_BASE    0x20003000u
+#define SOC_I2C_BASE    0x20004000u
 
 #define SOC_RESULT_ADDR 0x00007FF8u
 #define SOC_HALT_ADDR   0x00007FFCu
@@ -78,6 +80,34 @@
 
 #define SPI_STATUS_BUSY 0x1u
 #define SPI_STATUS_DONE 0x2u
+
+// i2c
+#define I2C_CTRL   SOC_IO32(SOC_I2C_BASE + 0x00)
+#define I2C_STATUS SOC_IO32(SOC_I2C_BASE + 0x04)
+#define I2C_CLKDIV SOC_IO32(SOC_I2C_BASE + 0x08)
+#define I2C_TXDATA SOC_IO32(SOC_I2C_BASE + 0x0C)
+#define I2C_RXDATA SOC_IO32(SOC_I2C_BASE + 0x10)
+#define I2C_CMD    SOC_IO32(SOC_I2C_BASE + 0x14)
+
+#define I2C_CTRL_EN  0x1u
+#define I2C_CTRL_IRQ 0x2u
+
+#define I2C_STATUS_BUSY   0x01u
+#define I2C_STATUS_DONE   0x02u   // write 1 to clear
+#define I2C_STATUS_NACK   0x04u   // write 1 to clear
+#define I2C_STATUS_ACTIVE 0x08u
+#define I2C_STATUS_SCL    0x10u
+#define I2C_STATUS_SDA    0x20u
+
+#define I2C_CMD_START 0x01u
+#define I2C_CMD_STOP  0x02u
+#define I2C_CMD_READ  0x04u
+#define I2C_CMD_WRITE 0x08u
+#define I2C_CMD_NACK  0x10u
+
+/* Nominal SCL = f_clk / (2 * (CLKDIV+1)); input sync/stretching adds time. */
+#define I2C_CLKDIV_100MHZ_100KHZ 499u
+#define I2C_CLKDIV_100MHZ_400KHZ 124u
 
 // mstatus/mie bits used by the timer example
 #define MSTATUS_MIE     0x00000008u

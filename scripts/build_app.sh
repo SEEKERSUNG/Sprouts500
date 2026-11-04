@@ -88,9 +88,10 @@ if [ "${RUN_SIM:-1}" = "0" ]; then
 fi
 
 iverilog -g2012 -o "$TBVVP" \
-    "$ROOT/sim/tb_app.v" \
+    "$ROOT/sim/tb_app.v" "$ROOT/sim/i2c_eeprom.v" \
     "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" "$ROOT/rtl/bus.v" \
-    "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
+    "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v" \
+    "$ROOT/rtl/i2c.v"
 
 set +e
 vvp "$TBVVP" "+ITCM_HEX=$HEX" "+MAX_CYCLES=${MAX_CYCLES:-2000000}" "$@" 2>&1 | tee "$LOG"

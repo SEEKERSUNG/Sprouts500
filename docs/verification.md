@@ -13,7 +13,7 @@ bash scripts/build_demo.sh     # 期望：TEST_PASS
 bash scripts/build_app.sh sw/example   # 自写 C 运行时；期望 TEST_PASS
 MARCH=rv32imafc_zicsr bash scripts/test_boot.sh  # FPGA UART Boot；期望 BOOT_TEST_PASS
 bash scripts/setup_cocotb.sh   # 一次性：.venv + cocotb/pytest（需要 python3.14-dev）
-bash scripts/run_cocotb.sh     # 期望：cocotb/soc 72 + cocotb/core 79 全部通过
+bash scripts/run_cocotb.sh     # 期望：cocotb/soc 82 + cocotb/core 79 全部通过
 bash scripts/setup_riscv_dv.sh # 一次性：.venv-dv + Sail；见 docs/verification_riscv_dv.md
 bash scripts/run_riscv_dv.sh   # 期望：6/6 lockstep PASS（3 随机 + 定向陷阱/A/C）
 bash scripts/synth.sh          # 期望：Yosys 完成并写出 build/syn/core_netlist.v
@@ -51,7 +51,7 @@ cocotb `test_mem_rand` / `test_core` 覆盖，详见 `docs/verification_riscv_dv
 | 改了什么 | 需要跑 |
 |---|---|
 | `rtl/core.v`、`rtl/fp_unit.v` | `run_isa.py`、`build_demo.sh`、`build_app.sh`、`run_cocotb.sh`、`run_riscv_dv.sh`、`synth.sh`（涉及时序再 `sta.sh`） |
-| `rtl/bus.v`、`rtl/timer.v`/`gpio.v`/`uart.v`/`spi.v`、`rtl/soc_top.v` | `build_demo.sh`、`build_app.sh`、`run_cocotb.sh`（SoC 套件）；ISA 只编译 core，覆盖不到这些 |
+| `rtl/bus.v`、`rtl/timer.v`/`gpio.v`/`uart.v`/`spi.v`/`i2c.v`、`rtl/soc_top.v` | `build_demo.sh`、`build_app.sh`、`run_cocotb.sh`（SoC 套件）；ISA 只编译 core，覆盖不到这些 |
 | `sim/tb_core.v` | `run_isa.py` |
 | `sim/tb_soc.v` | `build_demo.sh` |
 | `sim/tb_app.v`、`sw/lib/` | `build_app.sh sw/example` |
@@ -170,8 +170,9 @@ LA(rd,5b)
 ```text
 Hello Sprouts500!
 peripherals ok
+i2c ok
 irq ok
-UART_RX_BYTES=40
+UART_RX_BYTES=47
 TEST_PASS cycles=<n>
 ```
 
@@ -182,11 +183,13 @@ TEST_PASS cycles=<n>
 - UART TX 轮询，以及 115200 下的时序（100 MHz 时每比特 868 个时钟）。
 - 定时器计数和 W1C pending。
 - GPIO 方向/输出。
+- I2C 主机对 testbench 中地址 `0x50` 的 EEPROM 写入 `0xA5`，通过 repeated START 读回并比较；
+  `sim/i2c_eeprom.v` 是独立的 256 字节仿真从设备，不是 SoC 综合 RTL。
 - 机器定时器中断：`mtvec`、`mstatus.MIE`、`mie.MTIE`、`mepc`、`mcause`、
   陷阱进入/返回、`mret`；C ISR 由汇编陷阱处理程序调用。
 
 `sim/tb_soc.v` 以 868 个时钟的位周期解码 `uart_tx`，把字节追加到 `rx_buf`，并与
-40 字节预期字符串比较。halt mailbox 是 `0x7FFC`（32 KiB ITCM 顶部）；demo 在 UART
+47 字节预期字符串比较。I2C SCL/SDA 使用 `tri1` 上拉并连接 EEPROM 模型。halt mailbox 是 `0x7FFC`（32 KiB ITCM 顶部）；demo 在 UART
 排空后写入。
 
 Plusarg：`+ITCM_HEX=`、`+MAX_CYCLES=`、`+VCD`。
@@ -224,6 +227,9 @@ Plusarg：`+ITCM_HEX=`、`+MAX_CYCLES=`、`+VCD`。
 | `+GPIO_IN=<hex>` | 驱动配置为输入的 GPIO 引脚 |
 | `+SPI_LOOPBACK` | MOSI 接回 MISO |
 | `+VCD` | 生成 `build/tb_app.vcd` |
+
+`tb_app.v` 始终连接 `sim/i2c_eeprom.v`：7 位地址 `0x50`、256 字节，可用于用户程序的
+I2C 读写测试；SCL/SDA 由 `tri1` 提供仿真上拉。
 
 参考程序 `sw/example` 覆盖 DTCM、定时器、GPIO 回读和定时器中断。完整教程见
 `docs/c_programming.md`。
@@ -265,18 +271,19 @@ Nangate45 单元。`bash scripts/sta.sh` 随后报告 100 MHz pre-CTS 结果：s
 
 - `bash scripts/setup_cocotb.sh && bash scripts/run_cocotb.sh`
   - `cocotb/soc`：总线协议、`ready` 拉低、背靠背访问、`bus_conflict`，以及
-    timer/GPIO/UART/SPI 的寄存器、边界、随机测试和 reference model scoreboard。
+    timer/GPIO/UART/SPI/I2C 的寄存器、边界、随机测试和 reference model scoreboard。
   - `cocotb/core`：随机 ALU/M/访存/分支流、相关停顿、CSR/陷阱、中断时序、
     除法冻结、TCM 写门控、RVC 展开/控制流/trap、RV32A（AMO/LR/SC）。RV32F 的
     语义由官方 146 项 F ISA 测试覆盖，cocotb 的 RV32Interp 不含浮点。
   - 详见 `docs/verification_cocotb.md`、`docs/verification_cocotb_core.md`。
+  - 只跑新增 I2C 套件：`bash scripts/run_cocotb.sh cocotb/soc/test_i2c.py`，期望 10 项通过。
 - `bash scripts/setup_riscv_dv.sh && bash scripts/run_riscv_dv.sh`
   - riscv-dv 生成 RV32IM 随机程序，在 RTL 与 Sail 0.16 之间逐条比对退休指令、
     寄存器写、存储和陷阱记录；每次运行还固定执行定向陷阱、RV32A 与 RV32C 镜像。
     F 没有加入随机生成器或 lockstep 比较，由 ISA F 套件覆盖。
   - 详见 `docs/verification_riscv_dv.md`。
 
-当前基线：cocotb **72 + 79 项通过**；riscv-dv + Sail 默认 3 个种子加三个定向镜像
+当前基线：cocotb **82 + 79 项通过**；riscv-dv + Sail 默认 3 个种子加三个定向镜像
 **6/6 `COMPARE_PASS`**。
 
 ## 9. FPGA UART Boot 回归

@@ -13,11 +13,12 @@
 - 简易总线，带字节 strobe、ready 握手、连续事务分离。
 - FPGA UART Bootloader：2 KiB 受保护驻留 Boot、GPIO[0] 低有效 BOOT0、CRC32 分帧
   下载、普通复位自动启动；主机脚本和端到端 UART 仿真。
-- 定时器、GPIO、UART、SPI 外设和 SoC top。
+- 定时器、GPIO、UART、SPI、I2C 外设和 SoC top；I2C 为单主机、7 位地址、byte-oriented，
+  支持 repeated START、ACK/NACK、完成中断和 SCL clock stretching。
 - 官方 `riscv-arch-test` 2.x RV32I/M/C：73/73 通过；项目自带 A 定向测试 3/3。
   官方 F 套件 146/146。合计 ISA 222/222。
-- 裸机 SoC demo：UART hello、GPIO、三次定时器中断。
-- cocotb 套件：SoC/外设 72 项 + core 微架构 79 项（含 RVC 6 项、A 4 项、F 3 项、
+- 裸机 SoC demo：UART hello、GPIO、I2C EEPROM 写读、三次定时器中断。
+- cocotb 套件：SoC/外设 82 项 + core 微架构 79 项（含 RVC 6 项、A 4 项、F 3 项、
   RAS 定向 1 项、TCM 合并 1 项），含随机与定向测试；F 不在 RV32Interp 中，由 146 项 ISA F 测试覆盖。
 - riscv-dv + Sail 指令级随机 lockstep 验证（3 个随机种子 + 定向陷阱 + 定向 A +
   定向 C，6/6）。随机生成器仍只产生 I/M；C/A 由定向镜像覆盖，F 由 ISA 套件覆盖。
@@ -52,11 +53,10 @@
    - 给 riscv-dv 接入 F 随机指令（Sail 已支持 F）或增加定向 F lockstep 镜像。
    - 在 cocotb 中增加 FP 寄存器 scoreboard 与 FMA/除法/NaN 的定向用例。
 
-5. **外设验证**
-   - SPI 回环测试（testbench 中 MOSI 接 MISO），覆盖四种模式。
-   - 用 testbench 发送器做 UART RX 测试，覆盖 overrun/framing。
-   - 用 testbench 驱动引脚做 GPIO 边沿中断测试。
-   - 定时器预分频/单次/周期边界情况。
+5. **外设验证与扩展**
+   - SPI/UART/GPIO/定时器已有寄存器、边界和随机测试；I2C 新增 10 项定向/随机测试及
+     裸机 EEPROM 写读 demo。
+   - I2C 后续可选：多主机仲裁、10 位地址、从机模式、FIFO/DMA；当前均不实现。
 
 6. **性能（可选）**
    - ~~增加 EX/MEM->ID 前递~~（已完成）。

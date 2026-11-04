@@ -5,6 +5,7 @@
 //   0x2000_1000  gpio
 //   0x2000_2000  uart
 //   0x2000_3000  spi
+//   0x2000_4000  i2c
 //
 // Protocol:
 //   req is held by the core until the access completes. A transaction starts
@@ -63,18 +64,29 @@ module bus (
     output wire [11:0] spi_addr,
     output wire [31:0] spi_wdata,
     output wire [3:0]  spi_wstrb,
-    input  wire [31:0] spi_rdata
+    input  wire [31:0] spi_rdata,
+
+    // i2c
+    output wire        i2c_sel,
+    output wire        i2c_we,
+    output wire        i2c_rd,
+    output wire [11:0] i2c_addr,
+    output wire [31:0] i2c_wdata,
+    output wire [3:0]  i2c_wstrb,
+    input  wire [31:0] i2c_rdata
 );
 
     localparam [19:0] BASE_TIMER = 20'h20000;
     localparam [19:0] BASE_GPIO  = 20'h20001;
     localparam [19:0] BASE_UART  = 20'h20002;
     localparam [19:0] BASE_SPI   = 20'h20003;
+    localparam [19:0] BASE_I2C   = 20'h20004;
 
     wire sel_timer = (addr[31:12] == BASE_TIMER);
     wire sel_gpio  = (addr[31:12] == BASE_GPIO);
     wire sel_uart  = (addr[31:12] == BASE_UART);
     wire sel_spi   = (addr[31:12] == BASE_SPI);
+    wire sel_i2c   = (addr[31:12] == BASE_I2C);
 
     reg req_q;
     always @(posedge clk or negedge rstn) begin
@@ -91,7 +103,8 @@ module bus (
     wire [31:0] rdata_mux = sel_timer ? timer_rdata :
                             sel_gpio  ? gpio_rdata  :
                             sel_uart  ? uart_rdata  :
-                            sel_spi   ? spi_rdata   : 32'b0;
+                            sel_spi   ? spi_rdata   :
+                            sel_i2c   ? i2c_rdata   : 32'b0;
 
     reg [31:0] rdata_hold;
     always @(posedge clk or negedge rstn) begin
@@ -131,5 +144,12 @@ module bus (
     assign spi_addr  = addr[11:0];
     assign spi_wdata = wdata;
     assign spi_wstrb = wstrb;
+
+    assign i2c_sel   = sel_i2c;
+    assign i2c_we    = sel_i2c && first &&  we;
+    assign i2c_rd    = sel_i2c && first && !we;
+    assign i2c_addr  = addr[11:0];
+    assign i2c_wdata = wdata;
+    assign i2c_wstrb = wstrb;
 
 endmodule

@@ -17,7 +17,9 @@ module soc_fpga_top #(
     output wire        spi_sclk,
     output wire        spi_mosi,
     input  wire        spi_miso,
-    output wire [3:0]  spi_cs_n
+    output wire [3:0]  spi_cs_n,
+    inout  wire        i2c_scl,
+    inout  wire        i2c_sda
 );
 
     soc_top #(
@@ -35,7 +37,9 @@ module soc_fpga_top #(
         .spi_sclk(spi_sclk),
         .spi_mosi(spi_mosi),
         .spi_miso(spi_miso),
-        .spi_cs_n(spi_cs_n)
+        .spi_cs_n(spi_cs_n),
+        .i2c_scl(i2c_scl),
+        .i2c_sda(i2c_sda)
     );
 
 endmodule

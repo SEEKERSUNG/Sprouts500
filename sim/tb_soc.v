@@ -20,6 +20,7 @@ module tb_soc;
     wire uart_tx;
     wire spi_sclk, spi_mosi;
     wire [3:0] spi_cs_n;
+    tri1 i2c_scl, i2c_sda;
 
     soc_top #(
         .RESET_PC(32'h0000_0000),
@@ -34,12 +35,18 @@ module tb_soc;
         .spi_sclk(spi_sclk),
         .spi_mosi(spi_mosi),
         .spi_miso(1'b0),
-        .spi_cs_n(spi_cs_n)
+        .spi_cs_n(spi_cs_n),
+        .i2c_scl(i2c_scl),
+        .i2c_sda(i2c_sda)
     );
 
-    localparam EXP_LEN = 40;
+    i2c_eeprom u_eeprom (
+        .clk(clk), .rstn(rstn), .scl(i2c_scl), .sda(i2c_sda)
+    );
+
+    localparam EXP_LEN = 47;
     reg [1023:0] itcm_file;
-    reg [8*EXP_LEN-1:0] expected = "Hello Sprouts500!\nperipherals ok\nirq ok\n";
+    reg [8*EXP_LEN-1:0] expected = "Hello Sprouts500!\nperipherals ok\ni2c ok\nirq ok\n";
 
     integer cycles = 0;
     integer max_cycles = 2000000;

@@ -15,6 +15,7 @@
 //   +UART_FILE=<file>    also write received UART bytes to this file
 //   +GPIO_IN=<hex>       drive input GPIO pins (pins configured as inputs)
 //   +SPI_LOOPBACK        connect spi_mosi back to spi_miso
+//   I2C EEPROM model    7-bit address 0x50, 256 bytes, always connected
 //   +VCD                 dump build/tb_app.vcd
 
 module tb_app;
@@ -35,6 +36,7 @@ module tb_app;
     wire        uart_tx;
     wire        spi_sclk, spi_mosi;
     wire [3:0]  spi_cs_n;
+    tri1        i2c_scl, i2c_sda;
 
     soc_top #(
         .RESET_PC(32'h0000_0000),
@@ -49,7 +51,14 @@ module tb_app;
         .spi_sclk(spi_sclk),
         .spi_mosi(spi_mosi),
         .spi_miso(spi_loopback ? spi_mosi : 1'b0),
-        .spi_cs_n(spi_cs_n)
+        .spi_cs_n(spi_cs_n),
+        .i2c_scl(i2c_scl),
+        .i2c_sda(i2c_sda)
+    );
+
+    // A simulation EEPROM at 7-bit address 0x50 is always available to apps.
+    i2c_eeprom u_eeprom (
+        .clk(clk), .rstn(rstn), .scl(i2c_scl), .sda(i2c_sda)
     );
 
     // Drive only pins the core has not configured as outputs, so the

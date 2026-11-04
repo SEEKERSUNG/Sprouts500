@@ -32,6 +32,7 @@ TIMER = 0x2000_0000
 GPIO = 0x2000_1000
 UART = 0x2000_2000
 SPI = 0x2000_3000
+I2C = 0x2000_4000
 
 UART_STATUS = UART + 0x04
 UART_RXDATA = UART + 0x10
@@ -74,6 +75,7 @@ async def test_bus_every_window_readable(dut):
     assert (await bm.read(GPIO)).data == 0
     assert (await bm.read(UART + 0x08)).data == 867
     assert (await bm.read(SPI + 0x08)).data == 49
+    assert (await bm.read(I2C + 0x08)).data == 499
     # addresses below the fake-slave window decode to zero and are ready
     assert (await bm.read(0x0000_5000)).data == 0
     assert (await bm.read(0x1000_0000)).data == 0

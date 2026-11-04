@@ -7,7 +7,7 @@ Sprouts500 是一个最简的五级顺序 **RV32IMACF** MCU IP：
 - `rtl/core.v`：流水线、ITCM/DTCM、CSR/陷阱、M/A/C 扩展。
 - `rtl/fp_unit.v`：RV32F 浮点单元（分级流水线；与 core.v 一起构成 CPU）。
 - `rtl/bus.v`：一个简易的单 outstanding 总线。
-- `rtl/timer.v`、`rtl/gpio.v`、`rtl/uart.v`、`rtl/spi.v`：外设。
+- `rtl/timer.v`、`rtl/gpio.v`、`rtl/uart.v`、`rtl/spi.v`、`rtl/i2c.v`：外设。
 - `rtl/soc_top.v`：SoC 集成。
 - `sim/`：ISA 套件、SoC demo、用户程序、benchmark 和 lockstep 的 Icarus testbench。
 - `sw/isa/`：riscv-arch-test 目标适配层；`sw/demo/`：裸机 demo。
@@ -58,14 +58,14 @@ bash scripts/sta.sh              # OpenSTA 报告
 在声称某项修改可用之前：
 
 1. `python3 scripts/run_isa.py` -> **222/222 通过**。
-2. `bash scripts/build_demo.sh` -> **TEST_PASS**，且输出 40 字节 UART 字符串。
+2. `bash scripts/build_demo.sh` -> **TEST_PASS**，且输出 47 字节 UART 字符串。
 3. `bash scripts/synth.sh` -> Yosys 完成，无推断 latch/多驱动，
    已写出 `build/syn/core_netlist.v`。
 4. 如果改动涉及时序/SDC：运行 `bash scripts/sta.sh`，并如实报告 WNS/TNS。
 5. 如果改动 `sw/lib/`、`sim/tb_app.v` 或 `scripts/build_app.sh`：运行
    `bash scripts/build_app.sh sw/example`，必须 `TEST_PASS`。
 6. 任何 RTL 改动：运行 `bash scripts/run_cocotb.sh`，必须
-   `cocotb regression PASSED`（当前 soc 72 + core 79 项）。
+   `cocotb regression PASSED`（当前 soc 82 + core 79 项）。
 7. 任何 RTL 改动：运行 `bash scripts/run_riscv_dv.sh`，必须 6/6 lockstep PASS
    （3 个随机种子 + 定向陷阱 + 定向 A + 定向 C）。
 8. 如果改动 `sw/boot/`、`fpga/`、`sim/tb_boot.v`、UART 下载脚本或 ITCM Boot 参数：
@@ -133,6 +133,9 @@ bash scripts/sta.sh              # OpenSTA 报告
     `ITCM_INIT_FILE` 默认为空，现有 testbench 的显式 `$readmemh` 不变；非空时先把
     整个 ITCM 清 0，再装载 Boot 镜像，避免缺失应用头在仿真中为 X。FPGA Boot 布局/
     协议见 `docs/fpga_boot.md`。
+26. I2C 的 `scl_oe/sda_oe` 只能开漏拉低；除 START/STOP 外 SDA 只能在 SCL 低时变化。
+    SCL 高电平计数必须等同步后的引脚实际变高，以支持 clock stretching；未带 STOP 的
+    字节间保持 `bus_active` 并拉住 SCL，STOP 后才释放总线。
 
 ## 风格与结构
 
@@ -159,10 +162,10 @@ bash scripts/sta.sh              # OpenSTA 报告
 ## 当前状态 / 待办
 
 - 222/222 ISA 测试（I/M/C 官方 + A 定向 + F 官方）在 Ubuntu 26.04 通过（GCC 14.2，Icarus 12）。
-- SoC demo 在 Ubuntu 26.04 通过（UART hello、GPIO、定时器中断）。
+- SoC demo 在 Ubuntu 26.04 通过（UART hello、GPIO、I2C EEPROM 写读、定时器中断）。
 - FPGA UART Boot：2 KiB 驻留 Boot、GPIO[0] 低有效 BOOT0、分帧 CRC32 下载和
   `0x810` 应用；协议单测与端到端仿真通过。详见 `docs/fpga_boot.md`。
-- cocotb 套件通过：`cocotb/soc` 72 项（总线 + 外设 + core 程序）、`cocotb/core`
+- cocotb 套件通过：`cocotb/soc` 82 项（总线 + 外设 + core 程序）、`cocotb/core`
   79 项（流水线相关/前递/分支预测与 RAS/CSR/陷阱/中断/总线/停顿/RVC/A，以及 F 的
   hazard/fflags/FS=Off 3 项）。F 语义由 146 项 ISA 测试覆盖。
 - riscv-dv + Sail 指令级随机 lockstep 通过（3 个随机种子 + 定向陷阱 + 定向 A +

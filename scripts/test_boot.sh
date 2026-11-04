@@ -27,7 +27,7 @@ iverilog -g2012 -s tb_boot_init -o "$OUT/tb_boot_init.vvp" \
     "$ROOT/sim/tb_boot_init.v" "$ROOT/fpga/soc_fpga_top.v" \
     "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" \
     "$ROOT/rtl/bus.v" "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" \
-    "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
+    "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v" "$ROOT/rtl/i2c.v"
 # soc_fpga_top's default ITCM_INIT_FILE is relative to the synthesis tool's
 # working directory; run from the repo root so the same default works here.
 ( cd "$ROOT" && vvp "$OUT/tb_boot_init.vvp" "+BOOT_HEX=$OUT/boot/boot.hex" ) \
@@ -41,7 +41,7 @@ iverilog -g2012 -s tb_boot -o "$OUT/tb_boot.vvp" \
     "$ROOT/sim/tb_boot.v" "$ROOT/fpga/soc_fpga_top.v" \
     "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" \
     "$ROOT/rtl/bus.v" "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" \
-    "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
+    "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v" "$ROOT/rtl/i2c.v"
 
 set +e
 vvp "$OUT/tb_boot.vvp" \

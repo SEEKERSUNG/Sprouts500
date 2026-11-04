@@ -54,6 +54,7 @@ run.log   本次运行的完整输出
 | GPIO | `0x2000_1000` | |
 | UART | `0x2000_2000` | |
 | SPI | `0x2000_3000` | |
+| I2C | `0x2000_4000` | |
 
 `sw/lib/app.ld` 就是这样放的：
 
@@ -321,7 +322,37 @@ SPI_CS = 0;
 `sim/tb_app.v` 加 `+SPI_LOOPBACK` 会把 `spi_mosi` 直接接回 `spi_miso`，
 可以自测模式/位序。
 
-### 5.4 定时器中断
+### 5.4 I2C
+
+`sw/lib/soc.h` 提供全部 `I2C_*` 寄存器和位定义。每次命令发送/接收一个字节；7 位地址
+需要软件左移并拼入 R/W bit。以下向 `tb_app.v` 内置 EEPROM（地址 `0x50`）的指针 `0x20`
+写入 `0xA5`：
+
+```c
+static unsigned i2c_cmd(unsigned data, unsigned cmd)
+{
+    I2C_TXDATA = data;
+    I2C_CMD = cmd;
+    while (!(I2C_STATUS & I2C_STATUS_DONE))
+        ;
+    return I2C_STATUS;
+}
+
+I2C_CLKDIV = I2C_CLKDIV_100MHZ_400KHZ;
+I2C_CTRL = I2C_CTRL_EN;
+if (i2c_cmd(0xA0, I2C_CMD_START | I2C_CMD_WRITE) & I2C_STATUS_NACK)
+    soc_halt(1);
+if (i2c_cmd(0x20, I2C_CMD_WRITE) & I2C_STATUS_NACK)
+    soc_halt(2);
+if (i2c_cmd(0xA5, I2C_CMD_WRITE | I2C_CMD_STOP) & I2C_STATUS_NACK)
+    soc_halt(3);
+```
+
+读取时再次发送地址 W 和指针，然后以 `START|WRITE` 发送 `0xA1`；中间字节用
+`CMD_READ`，最后一个用 `CMD_READ|CMD_NACK|CMD_STOP`，完成后读 `I2C_RXDATA`。
+完整写读示例见 `sw/demo/main.c`。实际板上的 SCL/SDA 都必须接上拉电阻。
+
+### 5.5 定时器中断
 
 见 1.3 和 `sw/example/main.c`。要在保持使能的同时清 pending，写
 `TIMER_CTRL = 0x0F`（不是 `0x0B`）。
@@ -342,6 +373,9 @@ SPI_CS = 0;
 | `+GPIO_IN=<hex>` | 驱动输入引脚 |
 | `+SPI_LOOPBACK` | MOSI 接回 MISO |
 | `+VCD` | 生成 `build/tb_app.vcd` |
+
+无需 plusarg 的 I2C 模型始终存在：`sim/i2c_eeprom.v` 在地址 `0x50` 提供 256 字节 EEPROM，
+SCL/SDA 由 `tri1` 上拉。
 
 直接调用：
 
@@ -393,6 +427,7 @@ cat build/app/uart.txt
 | 想测 UART RX | 当前 tb 固定 `uart_rx=1`；在 `tb_app.v` 里加一个发送 task 或外部激励 |
 | 想测 GPIO 输入 | `+GPIO_IN=<hex>`，注意对应 pin 要先设 `DIR=0` |
 | 想测 SPI 从机 | `+SPI_LOOPBACK`；更真实的从机模型需要自己写 |
+| 想测 I2C | 直接使用内置 EEPROM 地址 `0x50`；模型位于 `sim/i2c_eeprom.v` |
 
 ---
 
@@ -411,8 +446,9 @@ ${RISCV_PREFIX}gcc -march=rv32imacf_zicsr -mabi=ilp32 \
 
 ${RISCV_PREFIX}objcopy -O binary build/app/app.elf build/app/app.bin
 # 再按 build_app.sh 里的 python 片段打包成 app.hex，然后：
-iverilog -g2012 -o build/app/tb_app.vvp sim/tb_app.v \
-    rtl/soc_top.v rtl/core.v rtl/bus.v rtl/timer.v rtl/gpio.v rtl/uart.v rtl/spi.v
+iverilog -g2012 -o build/app/tb_app.vvp sim/tb_app.v sim/i2c_eeprom.v \
+    rtl/soc_top.v rtl/core.v rtl/fp_unit.v rtl/bus.v rtl/timer.v rtl/gpio.v \
+    rtl/uart.v rtl/spi.v rtl/i2c.v
 vvp build/app/tb_app.vvp +ITCM_HEX=build/app/app.hex
 ```
 

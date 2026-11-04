@@ -1,4 +1,4 @@
-// Sprouts500 SoC top: core + simple bus + timer/gpio/uart/spi.
+// Sprouts500 SoC top: core + simple bus + timer/gpio/uart/spi/i2c.
 //
 // Memory map:
 //   0x0000_0000  ITCM (32 KiB)
@@ -7,6 +7,7 @@
 //   0x2000_1000  gpio
 //   0x2000_2000  uart
 //   0x2000_3000  spi
+//   0x2000_4000  i2c
 
 module soc_top #(
     parameter [31:0] RESET_PC        = 32'h0000_0000,
@@ -26,7 +27,10 @@ module soc_top #(
     output wire        spi_sclk,
     output wire        spi_mosi,
     input  wire        spi_miso,
-    output wire [3:0]  spi_cs_n
+    output wire [3:0]  spi_cs_n,
+
+    inout  wire        i2c_scl,
+    inout  wire        i2c_sda
 );
 
     // ------------------------------------------------------------------
@@ -69,7 +73,15 @@ module soc_top #(
     wire [31:0] spi_rdata;
     wire        spi_irq;
 
-    wire        ext_irq = gpio_irq | uart_irq | spi_irq;
+    wire        i2c_sel, i2c_we, i2c_rd;
+    wire [11:0] i2c_addr;
+    wire [31:0] i2c_wdata;
+    wire [3:0]  i2c_wstrb;
+    wire [31:0] i2c_rdata;
+    wire        i2c_irq;
+    wire        i2c_scl_oe, i2c_sda_oe;
+
+    wire        ext_irq = gpio_irq | uart_irq | spi_irq | i2c_irq;
 
     // ------------------------------------------------------------------
     // core
@@ -119,7 +131,10 @@ module soc_top #(
         .uart_wstrb(uart_wstrb), .uart_rdata(uart_rdata),
         .spi_sel(spi_sel), .spi_we(spi_we), .spi_rd(spi_rd),
         .spi_addr(spi_addr), .spi_wdata(spi_wdata),
-        .spi_wstrb(spi_wstrb), .spi_rdata(spi_rdata)
+        .spi_wstrb(spi_wstrb), .spi_rdata(spi_rdata),
+        .i2c_sel(i2c_sel), .i2c_we(i2c_we), .i2c_rd(i2c_rd),
+        .i2c_addr(i2c_addr), .i2c_wdata(i2c_wdata),
+        .i2c_wstrb(i2c_wstrb), .i2c_rdata(i2c_rdata)
     );
 
     timer u_timer (
@@ -154,6 +169,19 @@ module soc_top #(
         .sclk(spi_sclk), .mosi(spi_mosi), .miso(spi_miso),
         .cs_n(spi_cs_n), .irq(spi_irq)
     );
+
+    i2c u_i2c (
+        .clk(clk), .rstn(rstn),
+        .sel(i2c_sel), .we(i2c_we), .rd(i2c_rd),
+        .addr(i2c_addr), .wdata(i2c_wdata), .wstrb(i2c_wstrb),
+        .rdata(i2c_rdata),
+        .scl_i(i2c_scl), .sda_i(i2c_sda),
+        .scl_oe(i2c_scl_oe), .sda_oe(i2c_sda_oe), .irq(i2c_irq)
+    );
+
+    // I2C pads are open-drain: the peripheral only ever drives low.
+    assign i2c_scl = i2c_scl_oe ? 1'b0 : 1'bz;
+    assign i2c_sda = i2c_sda_oe ? 1'b0 : 1'bz;
 
     // ------------------------------------------------------------------
     // GPIO pads

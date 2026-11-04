@@ -29,7 +29,7 @@ python3 scripts/run_isa.py     # 222/222
 bash scripts/build_demo.sh     # TEST_PASS
 bash scripts/build_bench.sh    # CoreMark/Dhrystone best；MODE=ground 取 Dhrystone ground
 MARCH=rv32imafc_zicsr bash scripts/test_boot.sh  # FPGA UART Boot 协议单测 + BOOT_TEST_PASS
-bash scripts/run_cocotb.sh     # soc 72 + core 79 项通过
+bash scripts/run_cocotb.sh     # soc 82 + core 79 项通过
 bash scripts/run_riscv_dv.sh   # riscv-dv + Sail lockstep 6/6 通过
 bash scripts/synth.sh
 sudo bash scripts/setup_opensta.sh # 一次性安装 CUDD + OpenSTA 到 /opt/opensta
@@ -49,6 +49,8 @@ bash scripts/sta.sh             # 期望 100 MHz 下 setup/hold MET
 - `ITCM_BOOT_BYTES` 默认 0；FPGA 写保护必须同时门控数组写和同拍 store/load 合并，
   保护区 SC 返回失败、AMO 写被忽略。`ITCM_INIT_FILE` 默认为空；非空时先清 0 再装载
   Boot 镜像，避免缺失头为 X。BOOT0、地址边界、CRC 和下载顺序见 `docs/fpga_boot.md`。
+- I2C 的 SCL/SDA 只能开漏拉低；除 START/STOP 外 SDA 只在 SCL 低时变化，高电平计时必须
+  等同步后的 SCL 实际变高以支持 clock stretching。未 STOP 的字节间保持 `bus_active`。
 - RVC 第二个 IF 读端口、`if_rdata_hi_q`、64 项 BTB 索引 `PC[6:1]`、AMO 两拍写一次、
   LR/SC 重叠逻辑、MMIO 原子陷阱、`mepc` 只清 bit 0；FPU 的 start/busy/done
   握手、FP 寄存器 scoreboard、FS/fflags 规则。原因见 `CLAUDE.md`。

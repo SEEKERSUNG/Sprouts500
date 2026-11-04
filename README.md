@@ -1,6 +1,6 @@
 # Sprouts500
 
-一个最简的五级流水线 RV32IMACF MCU IP，包含一个简易总线，以及定时器、GPIO、UART、SPI 外设。
+一个最简的五级流水线 RV32IMACF MCU IP，包含一个简易总线，以及定时器、GPIO、UART、SPI、I2C 外设。
 
 本仓库**仅支持 Ubuntu/Linux**。`scripts/setup_ubuntu.sh` 安装主机工具，
 `scripts/setup_opensta.sh` 将 CUDD 3.0.0 + OpenSTA 安装到系统目录 `/opt/opensta`，
@@ -13,9 +13,9 @@
 | 项目 | 结果 |
 |---|---|
 | ISA 测试 | RV32I 38 + RV32M 8 + RV32C 27（`riscv-arch-test` 2.x）**73/73**；RV32A 定向 3/3；RV32F 146/146；合计 **222/222**（Ubuntu 26.04，GCC 14.2，Icarus 12） |
-| SoC demo：UART hello + 定时器中断 + GPIO | 通过（Ubuntu 26.04） |
+| SoC demo：UART hello + 定时器中断 + GPIO + I2C EEPROM 读写 | 通过（Ubuntu 26.04） |
 | FPGA UART Bootloader | 2 KiB 驻留 Boot、低有效 BOOT0（GPIO[0]）、分帧/CRC32 下载；协议单测 + 端到端仿真 `BOOT_TEST_PASS` |
-| cocotb 随机/定向验证 | SoC/外设 72 项 + core 微架构 79 项（含 RVC、RV32A、RV32F 集成），全部通过 |
+| cocotb 随机/定向验证 | SoC/外设 82 项 + core 微架构 79 项（含 RVC、RV32A、RV32F 集成），全部通过 |
 | riscv-dv + Sail 指令级随机 | 3 个 RV32IM 随机种子 + 定向陷阱 + 定向 A + 定向 C lockstep，6/6 通过 |
 | Yosys + Nangate45 门级综合 | Yosys 0.52，ABC `-fast`，2-word TCM 时序配置 + 驱动强度提升 |
 | OpenSTA 时序 | **100 MHz pre-CTS MET**：setup +3.148 ns，hold +0.083 ns，TNS/WNS 0.00（OpenSTA 3.1.0，理想时钟，97,225 单元） |
@@ -34,7 +34,7 @@ bash scripts/setup_ubuntu.sh
 python3 scripts/fetch_isa.py       # tests/isa 已 vendored；此步可选
 python3 scripts/run_isa.py         # 期望 222/222
 
-# 3. 裸机 SoC demo（UART + 定时器中断 + GPIO）
+# 3. 裸机 SoC demo（UART + 定时器中断 + GPIO + I2C EEPROM）
 bash scripts/build_demo.sh         # 期望 TEST_PASS
 
 # 4. 自己的 C 测试程序（运行时在 sw/lib，参考程序 sw/example）
@@ -99,10 +99,12 @@ rtl/timer.v      32 位定时器
 rtl/gpio.v       32 位 GPIO，带边沿中断
 rtl/uart.v       8N1 UART
 rtl/spi.v        8 位 SPI 主机，模式 0-3
+rtl/i2c.v        byte-oriented I2C 主机，START/STOP、ACK/NACK、clock stretching
 rtl/soc_top.v    SoC 集成
 
 sim/tb_core.v    仅核心的 ISA testbench
-sim/tb_soc.v     SoC demo testbench（UART 解码器 + halt mailbox）
+sim/tb_soc.v     SoC demo testbench（UART 解码器 + I2C EEPROM + halt mailbox）
+sim/i2c_eeprom.v 地址 0x50 的 256 字节 I2C EEPROM 仿真模型
 sim/tb_app.v     通用用户程序 testbench（result mailbox + UART 日志）
 sw/isa/          riscv-arch-test 目标适配层（model_test.h、link.ld）
 sw/demo/         裸机 hello + 定时器中断 demo
@@ -131,6 +133,7 @@ archive/         原始 core
 | GPIO | `0x2000_1000` | 4 KiB |
 | UART | `0x2000_2000` | 4 KiB |
 | SPI | `0x2000_3000` | 4 KiB |
+| I2C | `0x2000_4000` | 4 KiB |
 
 FPGA UART Boot 配置将 ITCM 的前 2 KiB 设为受保护 Boot 区，应用头/入口为
 `0x800/0x810`；默认非 FPGA 配置仍从 0 开始运行普通程序。详见 `docs/fpga_boot.md`。
@@ -182,6 +185,21 @@ IRQ = pending & IRQ_EN。要在保持定时器使能的同时清除 pending，�
 
 软件在写 TXDATA 前拉低 CS，传输完成后再释放。
 
+### I2C（`0x2000_4000`）
+
+| 偏移 | 名称 | 访问 | 位 |
+|---|---|---|---|
+| 0x00 | CTRL | RW | [0] EN，[1] DONE_IRQ_EN |
+| 0x04 | STATUS | RO/W1C | [0] BUSY，[1] DONE（W1C），[2] NACK（W1C），[3] BUS_ACTIVE，[4] SCL，[5] SDA |
+| 0x08 | CLKDIV | RW | SCL 半周期最小时钟数 - 1（复位 499 = 100 MHz 下标称 100 kHz） |
+| 0x0C | TXDATA | RW | 下一条 WRITE 的字节 |
+| 0x10 | RXDATA | RO | 最近 READ 的字节 |
+| 0x14 | CMD | WO | [0] START，[1] STOP，[2] READ，[3] WRITE，[4] NACK |
+
+单主机、7 位地址由软件组成地址字节，支持 repeated START、读 ACK/NACK、完成中断和 SCL
+clock stretching。SCL/SDA 为开漏引脚，板上需要上拉。命令序列和限制见 `docs/registers.md`，
+C 示例见 `sw/demo/main.c` 与 `docs/c_programming.md`。
+
 ## 核心架构（简版）
 
 - IF/ID/EX/MEM/WB。EX/MEM->ID 前递消除 ALU 相关停顿；普通 TCM load-use 在
@@ -215,8 +233,8 @@ IRQ = pending & IRQ_EN。要在保持定时器使能的同时清除 pending，�
   算术/比较/转换/分类指令以及五种舍入模式。
 - `sim/tb_core.v` 包含 4 MiB 仿真 ITCM（`jal-01` 的对齐填充需要），halt mailbox 位于
   `0x003F_FFF0`，并支持可选的流水线跟踪（`+TRACE`、`+TRACE_PIPE`）。
-- `sim/tb_soc.v` 启动 `sw/demo`，以 115200 波特率解码 UART，并检查
-  `Hello Sprouts500!\nperipherals ok\nirq ok\n`。
+- `sim/tb_soc.v` 启动 `sw/demo`，以 115200 波特率解码 UART，连接地址 `0x50` 的仿真
+  I2C EEPROM，并检查 `Hello Sprouts500!\nperipherals ok\ni2c ok\nirq ok\n`。
 - `sim/tb_app.v` 是通用用户程序 testbench：程序在 `0x7FF8` 写结果码、
   `0x7FFC` 写 halt magic，testbench 打印 UART 并比较结果码。
   `scripts/build_app.sh <dir>` 编译 `sw/lib` + 程序目录并运行；
@@ -227,8 +245,9 @@ IRQ = pending & IRQ_EN。要在保持定时器使能的同时清除 pending，�
   拒绝 `la x0,...`；补丁改为发出 `nop`）。
 - `cocotb/core/test_rvc.py` 与 `test_amo.py` 定向覆盖 RVC 展开/控制流/trap 与
   RV32A；`cocotb/soc/` 用 cocotb + Icarus 覆盖总线协议（`ready` 拉低、背靠背访问、
-  `bus_conflict`）、定时器/GPIO/UART/SPI 全部寄存器与边界，带独立参考模型和
-  scoreboard。`cocotb/core/` 覆盖流水线相关停顿、CSR/陷阱、中断时序、除法冻结、
+  `bus_conflict`）、定时器/GPIO/UART/SPI/I2C 全部寄存器与边界，带独立参考模型和
+  scoreboard。I2C 另覆盖地址/数据 NACK、repeated START、顺序读、clock stretching 和
+  随机 EEPROM 读写。`cocotb/core/` 覆盖流水线相关停顿、CSR/陷阱、中断时序、除法冻结、
   TCM 写门控。运行：`bash scripts/setup_cocotb.sh && bash scripts/run_cocotb.sh`。
 - `verif/riscv_dv/` 用 riscv-dv 生成 RV32IM 随机程序，在 RTL 与 Sail 参考模型上
   逐条比对退休指令、寄存器写和存储，并固定跑定向陷阱、RV32A、RV32C 三个镜像。运行：`bash scripts/setup_riscv_dv.sh &&

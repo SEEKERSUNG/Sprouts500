@@ -26,8 +26,9 @@ with open(sys.argv[2], 'w') as f:
 PY
 
 iverilog -g2012 -o "$ROOT/build/tb_soc.vvp" \
-    "$ROOT/sim/tb_soc.v" \
+    "$ROOT/sim/tb_soc.v" "$ROOT/sim/i2c_eeprom.v" \
     "$ROOT/rtl/soc_top.v" "$ROOT/rtl/core.v" "$ROOT/rtl/fp_unit.v" "$ROOT/rtl/bus.v" \
-    "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v"
+    "$ROOT/rtl/timer.v" "$ROOT/rtl/gpio.v" "$ROOT/rtl/uart.v" "$ROOT/rtl/spi.v" \
+    "$ROOT/rtl/i2c.v"
 
 vvp "$ROOT/build/tb_soc.vvp" "+ITCM_HEX=$ROOT/build/demo.hex" +MAX_CYCLES=500000

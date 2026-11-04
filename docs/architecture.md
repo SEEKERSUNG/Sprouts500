@@ -9,7 +9,7 @@
   AMO*.W；F 为 RV32F，浮点单元在 `rtl/fp_unit.v`）。
 - 一个自包含的 core 文件（`rtl/core.v`）；TCM 在内部。
 - 简易的单 outstanding 总线，一个文件。
-- 小而可读的外设：定时器、GPIO、UART、SPI。
+- 小而可读的外设：定时器、GPIO、UART、SPI、I2C。
 - 确定性、可综合的 Verilog-2001（对 Yosys/OpenSTA 友好），不使用 SystemVerilog。
 - 通过官方 `riscv-arch-test` RV32I/M/C 套件与项目自带的 A 定向测试。
 
@@ -335,6 +335,21 @@ bus_rdata_i, bus_ready_i <- bus
 `req` 保持高时保持读数据。这就是为什么总线前的 core 冻结（例如迭代除法）不会重复
 UART/FIFO 副作用。
 
+### 6.3 I2C 主机
+
+`rtl/i2c.v` 是单主机、byte-oriented 的 I2C 引擎，位于 `0x2000_4000`。每次 CMD 执行一个
+字节及可选 START/STOP，地址和 R/W bit 由软件作为第一个字节发送，因此没有隐藏的地址
+状态。9 个 SCL 时钟包括 8 个数据位和 1 个 ACK/NACK 位；READ 的最后一个字节由软件设置
+CMD.NACK。未带 STOP 时 `bus_active=1` 且 SCL 保持低，后续字节或 repeated START 不会
+产生意外的 bus-free 间隔。
+
+SCL/SDA 使用开漏输出：`scl_oe/sda_oe` 只允许拉低，顶层三态 pad 释放后由外部上拉产生
+高电平。数据只在 SCL 低时改变，START/STOP 是仅有的高电平期间 SDA 变化。SCL/SDA 输入
+经过两级同步；高电平计数必须等同步后的 SCL 实际变高，否则从设备 clock stretching 时
+主机会继续采样。标称速率为 `f_clk/(2*(CLKDIV+1))`，同步和 stretching 会延长高电平。
+DONE 可产生共享外部中断，NACK/DONE 均可 W1C。当前不实现多主机仲裁、10 位地址、从机
+模式、FIFO 或 DMA。
+
 ## 7. WB
 
 - `WB_rd_write_data` 选择 load lane/符号扩展或 `WB_result`。
@@ -453,6 +468,9 @@ PC <= mepc
     内的 SC 必须返回失败，AMO 写必须被忽略。默认 0 才能保持普通 ISA/应用自修改 ITCM
     的行为。FPGA 初始化文件非空时先清 0 再装载，默认空不能取代 testbench 的显式
     `$readmemh`。
+32. I2C 的 `scl_oe/sda_oe` 只能拉低；除 START/STOP 外 SDA 只能在 SCL 低时变化。SCL 高电平
+    计数必须等待同步后的引脚真正变高，以支持 clock stretching；字节间未 STOP 时保持
+    `bus_active` 和 SCL 低，STOP 后才能释放总线。
 
 ## 10. 复位
 
@@ -480,4 +498,4 @@ PC <= mepc
   3.08 CoreMark/MHz，100 MHz）；同编译器优化前为 281.687（355,003 周期）。Dhrystone best
   262,387（190,558 周期，1.493 DMIPS/MHz），同编译器优化前为 248,067（201,558 周期）。
   Dhrystone ground 的 GCC 14.2 历史参考为 135,660（368,567 周期，0.772 DMIPS/MHz）。
-- UART/SPI/定时器为内存映射；无 DMA。
+- UART/SPI/I2C/定时器为内存映射；无 DMA。

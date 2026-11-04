@@ -6,6 +6,7 @@
 #define GPIO_BASE  0x20001000u
 #define UART_BASE  0x20002000u
 #define SPI_BASE   0x20003000u
+#define I2C_BASE   0x20004000u
 
 #define TIMER_CTRL  REG32(TIMER_BASE + 0x00)
 #define TIMER_CNT   REG32(TIMER_BASE + 0x04)
@@ -27,6 +28,13 @@
 #define SPI_TXDATA  REG32(SPI_BASE + 0x0C)
 #define SPI_RXDATA  REG32(SPI_BASE + 0x10)
 #define SPI_CS      REG32(SPI_BASE + 0x14)
+
+#define I2C_CTRL    REG32(I2C_BASE + 0x00)
+#define I2C_STATUS  REG32(I2C_BASE + 0x04)
+#define I2C_CLKDIV  REG32(I2C_BASE + 0x08)
+#define I2C_TXDATA  REG32(I2C_BASE + 0x0C)
+#define I2C_RXDATA  REG32(I2C_BASE + 0x10)
+#define I2C_CMD     REG32(I2C_BASE + 0x14)
 
 static void uart_init(void)
 {
@@ -52,6 +60,39 @@ static unsigned timer_read(void)
     TIMER_CMP = 0xffffffffu;
     TIMER_CTRL = 0x1;      /* enable, free running */
     return TIMER_CNT;
+}
+
+static unsigned i2c_command(unsigned data, unsigned cmd)
+{
+    I2C_TXDATA = data;
+    I2C_CMD = cmd;
+    while (!(I2C_STATUS & 0x2))
+        ;
+    return I2C_STATUS;
+}
+
+/* Write and read back one byte in the testbench EEPROM at address 0x50. */
+static int i2c_test(void)
+{
+    I2C_CTRL = 0;
+    I2C_CLKDIV = 124;      /* nominal 400 kHz at 100 MHz */
+    I2C_CTRL = 0x1;
+
+    if (i2c_command(0xa0, 0x9) & 0x4)  /* START + address W */
+        return 1;
+    if (i2c_command(0x20, 0x8) & 0x4)  /* memory pointer */
+        return 2;
+    if (i2c_command(0xa5, 0xa) & 0x4)  /* data + STOP */
+        return 3;
+
+    if (i2c_command(0xa0, 0x9) & 0x4)
+        return 4;
+    if (i2c_command(0x20, 0x8) & 0x4)
+        return 5;
+    if (i2c_command(0xa1, 0x9) & 0x4)  /* repeated START + address R */
+        return 6;
+    (void)i2c_command(0, 0x16);        /* last READ: NACK + STOP */
+    return (I2C_RXDATA == 0xa5) ? 0 : 7;
 }
 
 /* ------------------------------------------------------------------ */
@@ -111,6 +152,11 @@ int main(void)
     GPIO_OUT = 0x0;
 
     uart_puts("peripherals ok\n");
+
+    if (i2c_test() == 0)
+        uart_puts("i2c ok\n");
+    else
+        uart_puts("i2c fail\n");
 
     /* timer interrupt test: take three periodic interrupts */
     irq_count = 0;

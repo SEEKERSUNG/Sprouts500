@@ -10,6 +10,7 @@
 | GPIO | `0x2000_1000` | 4 KiB | `0x2` |
 | UART | `0x2000_2000` | 4 KiB | `0x2` |
 | SPI | `0x2000_3000` | 4 KiB | `0x2` |
+| I2C | `0x2000_4000` | 4 KiB | `0x2` |
 
 总线译码 `addr[31:12]`：
 
@@ -18,6 +19,7 @@
 0x20001 -> gpio
 0x20002 -> uart
 0x20003 -> spi
+0x20004 -> i2c
 ```
 
 未映射的总线读返回 0；未映射写被忽略。所有外设寄存器为 32 位、按 word 寻址。
@@ -167,20 +169,73 @@ rx = SPI_RXDATA;
 SPI_CS = 0;
 ```
 
-## 7. 中断连接
+## 7. I2C（`0x2000_4000`）
+
+| 偏移 | 名称 | 访问 | 复位 | 说明 |
+|---|---|---|---|---|
+| 0x00 | CTRL | RW | 0 | [0] EN，[1] DONE_IRQ_EN |
+| 0x04 | STATUS | RO/W1C | 0 | [0] BUSY（RO），[1] DONE（W1C），[2] NACK（W1C），[3] BUS_ACTIVE（RO），[4] SCL（RO），[5] SDA（RO） |
+| 0x08 | CLKDIV | RW | 499 | SCL 半周期的最小时钟数 - 1 |
+| 0x0C | TXDATA | RW | 0 | 下一条 WRITE 命令发送的字节 |
+| 0x10 | RXDATA | RO | 0 | 最近一次 READ 收到的字节 |
+| 0x14 | CMD | WO | - | [0] START，[1] STOP，[2] READ，[3] WRITE，[4] NACK |
+
+- 仅单主机、byte-oriented、MSB first。软件把 **7 位地址左移一位并拼上 R/W bit**，作为首个
+  数据字节发送；硬件没有独立地址寄存器。支持 START、repeated START、STOP、写 ACK 检查、
+  读 ACK/NACK 和 SCL clock stretching。不支持 10 位地址、多主机仲裁、从机模式、FIFO 或 DMA。
+- `EN=1` 且 `BUSY=0` 时写 CMD 才接受命令。READ/WRITE 必须二选一；也支持 START-only 和
+  STOP-only。其他空命令、READ+WRITE、START+STOP-only，以及 BUSY 时的 CMD 写均被忽略。
+- WRITE 命令发送 TXDATA，随后释放 SDA 接收 ACK；第 9 个时钟采到高电平则置位 NACK。
+  READ 命令释放 SDA 接收 8 位，随后主机拉低 SDA 回复 ACK；CMD.NACK=1 时改为释放 SDA
+  回复 NACK，通常用于最后一个读字节。DONE 表示整个命令（包括可选 STOP）结束，RXDATA
+  此时有效。读 RXDATA 不清 DONE。
+- DONE/NACK 在下一条接受的命令开始时自动清除，也可向 STATUS 对应位写 1 清除。
+  `irq = DONE && DONE_IRQ_EN`，并入 core 的共享外部中断线。
+- 未带 STOP 的字节命令结束后 `BUS_ACTIVE=1`，SCL 保持低，软件可继续下一字节或发
+  repeated START。STOP 完成后 `BUS_ACTIVE=0`，两条线都释放。地址 NACK 后可用 STOP-only
+  结束总线。EN=0 会中止引擎并释放两条线，软件应只在空闲时关闭它。
+- 标称 `SCL = f_clk / (2 * (CLKDIV+1))`。100 MHz 下 CLKDIV=499/124 分别对应 100/400 kHz；
+  输入同步会增加少量高电平时间，clock stretching 会进一步降低实际速率。CLKDIV 应在
+  BUSY=0 时配置。两条输入都有两级同步器；SCL 高电平计数只在同步后的引脚确实变高后进行。
+- `scl_oe/sda_oe=1` 只把对应引脚拉低，绝不驱动高电平。SoC/FPGA 顶层使用三态 pad，
+  **板上 SCL/SDA 都必须有上拉电阻**。
+
+典型 EEPROM 写（7 位地址 `0x50`，寄存器指针 `0x20`，数据 `0xA5`）：
+
+```c
+I2C_CLKDIV = I2C_CLKDIV_100MHZ_400KHZ;
+I2C_CTRL = I2C_CTRL_EN;
+I2C_TXDATA = 0xA0;                       /* 0x50 << 1, write */
+I2C_CMD = I2C_CMD_START | I2C_CMD_WRITE;
+while (!(I2C_STATUS & I2C_STATUS_DONE)) ;
+if (I2C_STATUS & I2C_STATUS_NACK) { /* error */ }
+I2C_TXDATA = 0x20;
+I2C_CMD = I2C_CMD_WRITE;
+while (!(I2C_STATUS & I2C_STATUS_DONE)) ;
+I2C_TXDATA = 0xA5;
+I2C_CMD = I2C_CMD_WRITE | I2C_CMD_STOP;
+while (!(I2C_STATUS & I2C_STATUS_DONE)) ;
+```
+
+读取时重新发送地址 W + 指针，再以 `START|WRITE` 发送 `0xA1` 形成 repeated START；
+中间读字节用 `CMD_READ`，最后一个用 `CMD_READ|CMD_NACK|CMD_STOP`，然后读 RXDATA。
+完整可运行示例见 `sw/demo/main.c`。
+
+## 8. 中断连接
 
 ```
 timer_irq  -> core.timer_irq_i  -> mip.MTIP (bit 7)
 gpio_irq   -\
 uart_irq    > OR -> core.ext_irq_i -> mip.MEIP (bit 11)
-spi_irq    -/
+spi_irq     -\
+i2c_irq    -/
 soft_irq   -> 0
 ```
 
 `mie` 位：MTIE=bit 7，MEIE=bit 11。`mstatus.MIE` 是全局使能。外部线是共享的；
 软件读取外设状态/pending 寄存器来识别来源。
 
-## 8. 复位值
+## 9. 复位值
 
 | 寄存器 | 复位值 |
 |---|---|
@@ -191,4 +246,6 @@ soft_irq   -> 0
 | UART BAUD | 867 |
 | SPI CTRL/STATUS/CS | 0 |
 | SPI CLKDIV | 49 |
+| I2C CTRL/STATUS/TXDATA/RXDATA | 0 |
+| I2C CLKDIV | 499 |
 | CSR | 0 |

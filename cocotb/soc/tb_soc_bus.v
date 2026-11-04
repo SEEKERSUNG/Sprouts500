@@ -1,7 +1,7 @@
 // SoC-level cocotb testbench.
 //
 // soc_top has no external bus ports, so this bench replicates its contents
-// (core + bus + timer/gpio/uart/spi + GPIO pads) and adds:
+// (core + bus + timer/gpio/uart/spi/i2c + GPIO pads) and adds:
 //
 //   * an external bus master (`ext_master` selects it) with its own ready,
 //     which lets the cocotb BusMaster drive the real bus/peripherals while
@@ -12,7 +12,7 @@
 //   * `core_stall` to stretch the core's bus_ready_i for any access
 //     (bus_wait coverage);
 //   * observability ports for the core's bus outputs;
-//   * GPIO/UART/SPI pins and loopback hooks;
+//   * GPIO/UART/SPI/I2C pins and loopback/slave hooks;
 //   * `+ITCM_HEX=<file>` loads an instruction image into u_core.ITCM.
 //
 // The RTL itself is not modified; the wiring below mirrors rtl/soc_top.v and
@@ -57,6 +57,10 @@ module tb_soc_bus #(
     input  wire        spi_miso,
     input  wire        spi_loopback,
     output wire [3:0]  spi_cs_n,
+    inout  wire        i2c_scl,
+    inout  wire        i2c_sda,
+    input  wire        i2c_scl_ext_en,
+    input  wire        i2c_sda_ext_en,
 
     // core bus observability
     output wire        core_req,
@@ -76,6 +80,7 @@ module tb_soc_bus #(
     output wire        gpio_irq_o,
     output wire        uart_irq_o,
     output wire        spi_irq_o,
+    output wire        i2c_irq_o,
 
     // program halt mailbox: ITCM[ITCM_WORDS-1] changed to 0x5A5A5A5A
     output wire        core_halted
@@ -122,7 +127,15 @@ module tb_soc_bus #(
     wire [31:0] spi_rdata;
     wire        spi_irq;
 
-    wire        ext_irq = gpio_irq | uart_irq | spi_irq;
+    wire        i2c_sel, i2c_we, i2c_rd;
+    wire [11:0] i2c_addr;
+    wire [31:0] i2c_wdata;
+    wire [3:0]  i2c_wstrb;
+    wire [31:0] i2c_rdata;
+    wire        i2c_irq;
+    wire        i2c_scl_oe, i2c_sda_oe;
+
+    wire        ext_irq = gpio_irq | uart_irq | spi_irq | i2c_irq;
 
     // Duplicate of bus.v's req edge detector.  It uses the same muxed req and
     // the same reset, so `first` lines up with the strobes bus.v generates.
@@ -202,7 +215,10 @@ module tb_soc_bus #(
         .uart_wstrb(uart_wstrb), .uart_rdata(uart_rdata),
         .spi_sel(spi_sel), .spi_we(spi_we), .spi_rd(spi_rd),
         .spi_addr(spi_addr), .spi_wdata(spi_wdata),
-        .spi_wstrb(spi_wstrb), .spi_rdata(spi_rdata)
+        .spi_wstrb(spi_wstrb), .spi_rdata(spi_rdata),
+        .i2c_sel(i2c_sel), .i2c_we(i2c_we), .i2c_rd(i2c_rd),
+        .i2c_addr(i2c_addr), .i2c_wdata(i2c_wdata),
+        .i2c_wstrb(i2c_wstrb), .i2c_rdata(i2c_rdata)
     );
 
     // fake slave lives above the real bus; reads from its address window are
@@ -276,6 +292,22 @@ module tb_soc_bus #(
         .cs_n(spi_cs_n), .irq(spi_irq)
     );
 
+    i2c u_i2c (
+        .clk(clk), .rstn(rstn),
+        .sel(i2c_sel), .we(i2c_we), .rd(i2c_rd),
+        .addr(i2c_addr), .wdata(i2c_wdata), .wstrb(i2c_wstrb),
+        .rdata(i2c_rdata),
+        .scl_i(i2c_scl), .sda_i(i2c_sda),
+        .scl_oe(i2c_scl_oe), .sda_oe(i2c_sda_oe), .irq(i2c_irq)
+    );
+
+    assign i2c_scl = i2c_scl_oe     ? 1'b0 :
+                     i2c_scl_ext_en ? 1'b0 : 1'bz;
+    assign i2c_sda = i2c_sda_oe     ? 1'b0 :
+                     i2c_sda_ext_en ? 1'b0 : 1'bz;
+    pullup(i2c_scl);
+    pullup(i2c_sda);
+
     // ------------------------------------------------------------------
     // GPIO pads - external drive only on pins configured as input
     // ------------------------------------------------------------------
@@ -301,6 +333,7 @@ module tb_soc_bus #(
     assign gpio_irq_o  = gpio_irq;
     assign uart_irq_o  = uart_irq;
     assign spi_irq_o   = spi_irq;
+    assign i2c_irq_o   = i2c_irq;
 
     // ------------------------------------------------------------------
     // program image: one flat image per module, loaded once at time 0
