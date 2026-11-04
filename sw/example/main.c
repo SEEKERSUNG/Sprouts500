@@ -22,9 +22,7 @@ void trap_handler(unsigned int cause, unsigned int epc, unsigned int tval)
         return;
     }
 
-    uart_puts("EXCEPTION mcause=");
-    uart_puthex(cause);
-    uart_puts("\n");
+    uart_printf("EXCEPTION mcause=0x%08X\n", cause);
     soc_halt(0xE0000000u | (cause & 0xFFFFu));
 }
 
@@ -118,6 +116,8 @@ int main(void)
 
     uart_init();
     uart_puts(banner);
+    uart_printf("printf: dec=%d uint=%u hex=0x%08X str=%s chr=%c\n",
+                -42, 4000000000u, 0xDEADBEEFu, "ok", '!');
 
     rc = test_dtcm();
     uart_puts(rc ? "dtcm FAIL\n" : "dtcm ok\n");

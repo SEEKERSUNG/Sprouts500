@@ -163,6 +163,7 @@ bash scripts/build_app.sh sw/lab
 
 ```text
 Sprouts500 example app
+printf: dec=-42 uint=4000000000 hex=0xDEADBEEF str=ok chr=!
 dtcm ok
 timer ok
 gpio ok
@@ -171,7 +172,7 @@ irq ok
 example PASS
 
 APP_RESULT=0 (0x00000000) expected=0
-APP_CYCLES=665558 UART_RX_BYTES=74
+APP_CYCLES=1187341 UART_RX_BYTES=134
 TEST_PASS
 ```
 
@@ -214,13 +215,25 @@ TEST_PASS
 
 ## 4. 常用模板
 
-### 4.1 打印数字
+### 4.1 格式化输出
+
+`uart_printf` 提供裸机可用的 printf 子集，可直接打印动态变量：
 
 ```c
-uart_puthex(0xDEADBEEF);    // 8 位十六进制
-uart_putdec(123456);        // 无符号十进制
-uart_puts("\n");
+int rc = -42;
+unsigned int cycles = 123456;
+uart_printf("rc=%d cycles=%u hex=0x%08X str=%s\n",
+            rc, cycles, 0xDEADBEEFu, "ok");
 ```
+
+支持 `%d` / `%i` / `%u` / `%o` / `%x` / `%X` / `%c` / `%s` / `%p` / `%%`，
+以及 `-`、`0`、`+`、空格标志、宽度（数字或 `*`）、精度（数字或 `*`）和
+`l`/`h`/`z`/`t` 长度修饰。例如 `%08X`、`%-10.3s`、`%*.2d`、`%ld`。
+
+为了不引入软浮点格式化和 64 位除法代码，**不支持 `%f`/`%e`/`%g`、64 位的
+`%ll`/`%j` 以及 `%n`**；这些转换会消耗对应参数，但把格式串原样打印（例如
+输出 `%f`、`%lld`、`%n`），避免后续参数错位。`#` 和 `'` 标志接受但忽略。
+`uart_puthex` / `uart_putdec` 仍保留，适合简单的定宽十六进制或无符号十进制。
 
 ### 4.2 断言
 
@@ -275,6 +288,7 @@ result[0] = 0x12345678;
 ```c
 uart_init();                    // BAUD=867 (100 MHz/115200), TX_EN
 uart_puts("hello\n");
+uart_printf("count=%u\n", count);
 uart_flush();                   // halt 前必须等最后一个停止位发完
 ```
 

@@ -123,6 +123,9 @@ void uart_putc(char c);
 void uart_puts(const char *s);
 void uart_puthex(unsigned int v);
 void uart_putdec(unsigned int v);
+// printf-style output; integer/string conversions only (no %f).
+void uart_printf(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
 void uart_flush(void);
 void soc_halt(unsigned int code) __attribute__((noreturn));
 
